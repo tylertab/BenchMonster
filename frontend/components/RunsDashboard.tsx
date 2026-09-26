@@ -101,7 +101,7 @@ export function RunsDashboard({ profile }: { profile?: { id: number; name: strin
       <div className="flex flex-wrap items-center gap-2">
         <input
           className={`${inputClass} max-w-sm`}
-          placeholder="Search prompts, templates, files, models, run ID…"
+          placeholder="Search profiles, prompts, models, run ID…"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           aria-label="Search runs"
