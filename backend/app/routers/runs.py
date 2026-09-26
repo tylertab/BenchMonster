@@ -61,7 +61,8 @@ async def list_runs(
     if version:
         where.append(f"r.profile_version = {arg(version)}")
     if dataset_id:
-        where.append(f"exists (select 1 from run_datasets rd where rd.run_id = r.id and rd.dataset_id = {arg(dataset_id)})")
+        d = arg(dataset_id)
+        where.append(f"exists (select 1 from run_datasets rd where rd.run_id = r.id and (rd.dataset_id = {d} or rd.expected_dataset_id = {d}))")
     if model_id:
         where.append(f"exists (select 1 from run_models rm where rm.run_id = r.id and rm.model_id = {arg(model_id)})")
 

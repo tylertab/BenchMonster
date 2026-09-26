@@ -17,7 +17,10 @@ export type Model = {
 
 export type ScoringMethod = "exact" | "contains" | "regex" | "numeric" | "json_schema" | "json_fields" | "llm_judge";
 export type RunStatus = "queued" | "running" | "completed" | "failed";
-export type RunParams = { max_tokens: number; temperature: number; concurrency: number };
+export type RunMode = "realtime" | "batch";
+export type RunParams = { max_tokens: number; temperature: number; concurrency: number; mode?: RunMode; batch_size?: number };
+
+export type JsonSchema = { type?: string; properties?: Record<string, { type?: string; description?: string; enum?: unknown[] } & Record<string, unknown>>; required?: string[] } & Record<string, unknown>;
 
 export type Prompt = {
   id: number;
@@ -41,8 +44,13 @@ export type Dataset = {
   row_count: number;
   created_at: string;
   created_by: string | null;
+  description: string | null;
+  schema: JsonSchema | null;
   run_count: number;
+  expected_run_count: number;
 };
+
+export type ValidationReport = { checked: number; invalid: number; errors: { row: number; field: string; message: string }[] };
 
 export type DatasetDetail = Dataset & { rows: ({ idx: number } & Record<string, string>)[] };
 
@@ -110,6 +118,10 @@ export type RunDataset = {
   filename: string;
   mapping: Record<string, string>;
   expected_column: string | null;
+  expected_dataset_id: number | null;
+  expected_filename: string | null;
+  input_key: string | null;
+  expected_key: string | null;
   rows: number;
 };
 
@@ -141,7 +153,14 @@ export type Run = {
   summary: ModelSummary[];
 };
 
-export type DatasetRef = { dataset_id: number; mapping: Record<string, string>; expected_column: string | null };
+export type DatasetRef = {
+  dataset_id: number;
+  mapping: Record<string, string>;
+  expected_column: string | null;
+  expected_dataset_id: number | null;
+  input_key: string | null;
+  expected_key: string | null;
+};
 
 /** Everything a benchmark profile version stores (and a run needs). */
 export type ProfileConfig = {
@@ -152,6 +171,8 @@ export type ProfileConfig = {
   scoring_method: ScoringMethod;
   scoring_config: Record<string, unknown>;
   model_ids: number[];
+  mode: RunMode;
+  batch_size: number;
 } & RunParams;
 
 export type ProfileVersion = {
@@ -167,7 +188,16 @@ export type ProfileVersion = {
   note: string | null;
   created_at: string;
   created_by_name: string | null;
-  datasets: (RunDataset & { row_count: number | null; columns: string[] | null; available: boolean })[];
+  datasets: (RunDataset & {
+    row_count: number | null;
+    columns: string[] | null;
+    format: string | null;
+    available: boolean;
+    expected_row_count: number | null;
+    expected_columns: string[] | null;
+    expected_format: string | null;
+    expected_available: boolean;
+  })[];
   models: { id: number; display_name: string; model_id: string; active: boolean }[];
 };
 
@@ -208,13 +238,24 @@ export function versionToConfig(v: ProfileVersion): ProfileConfig {
     prompt_name: v.prompt_name,
     system_prompt: v.system_prompt,
     template: v.template,
-    datasets: v.datasets.filter((d) => d.dataset_id).map((d) => ({ dataset_id: d.dataset_id!, mapping: d.mapping, expected_column: d.expected_column })),
+    datasets: v.datasets
+      .filter((d) => d.dataset_id)
+      .map((d) => ({
+        dataset_id: d.dataset_id!,
+        mapping: d.mapping,
+        expected_column: d.expected_column,
+        expected_dataset_id: d.expected_dataset_id,
+        input_key: d.input_key,
+        expected_key: d.expected_key,
+      })),
     scoring_method: v.scoring_method,
     scoring_config: v.scoring_config,
     model_ids: v.model_ids,
     max_tokens: v.params.max_tokens ?? 4096,
     temperature: v.params.temperature ?? 0,
     concurrency: v.params.concurrency ?? 8,
+    mode: v.params.mode ?? "realtime",
+    batch_size: v.params.batch_size ?? 10,
   };
 }
 
@@ -365,6 +406,9 @@ export const api = {
     if (name) form.append("name", name);
     return request<DatasetDetail>("/datasets", { method: "POST", body: form });
   },
+  updateDataset: (id: number, body: { name: string; description?: string | null; schema?: JsonSchema }) => patch<DatasetDetail>(`/datasets/${id}`, body),
+  validateDataset: (id: number, schema?: JsonSchema) => post<ValidationReport>(`/datasets/${id}/validate`, { schema }),
+  inferSchema: (id: number) => request<JsonSchema>(`/datasets/${id}/infer-schema`),
   deleteDataset: (id: number) => del<{ ok: boolean }>(`/datasets/${id}`),
 
   profiles: () => request<ProfileListItem[]>("/profiles"),

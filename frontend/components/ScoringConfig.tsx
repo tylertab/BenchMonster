@@ -41,6 +41,11 @@ export const DEFAULT_SCORING: ScoringState = {
   fields_threshold: "1",
 };
 
+const clamp01 = (v: string, fallback: number) => {
+  const n = Number(v);
+  return Number.isFinite(n) && v !== "" ? Math.min(1, Math.max(0, n)) : fallback;
+};
+
 /** Build the backend scoring_config; throws with a user-facing message on bad input. */
 export function buildScoringConfig(method: ScoringMethod, s: ScoringState): Record<string, unknown> {
   switch (method) {
@@ -59,7 +64,7 @@ export function buildScoringConfig(method: ScoringMethod, s: ScoringState): Reco
         throw new Error("JSON schema is not valid JSON");
       }
     case "json_fields": {
-      const cfg: Record<string, unknown> = { pass_threshold: Number(s.fields_threshold) || 1 };
+      const cfg: Record<string, unknown> = { pass_threshold: clamp01(s.fields_threshold, 1) };
       const fields = s.fields.split(",").map((f) => f.trim()).filter(Boolean);
       if (fields.length) cfg.fields = fields;
       if (s.fields_schema.trim()) {
@@ -72,7 +77,7 @@ export function buildScoringConfig(method: ScoringMethod, s: ScoringState): Reco
       return cfg;
     }
     case "llm_judge":
-      return { rubric: s.rubric || undefined, pass_threshold: Number(s.pass_threshold) || 0.7 };
+      return { rubric: s.rubric || undefined, pass_threshold: clamp01(s.pass_threshold, 0.7) };
   }
 }
 

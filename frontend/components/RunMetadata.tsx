@@ -56,14 +56,23 @@ export function RunMetadata({ run }: { run: Run }) {
                         <code className="text-accent">{`{{${v}}}`}</code> ← {c}
                       </span>
                     ))}
-                    {d.expected_column && <span>expected ← {d.expected_column}</span>}
+                    {d.expected_dataset_id || d.expected_filename ? (
+                      <span>
+                        expected ← <span className="font-mono">{d.expected_filename}</span> ({d.input_key ? `${d.input_key} = ${d.expected_key}` : "row order"}
+                        {d.expected_column ? `, ${d.expected_column}` : ", whole row"})
+                      </span>
+                    ) : (
+                      d.expected_column && <span>expected ← {d.expected_column}</span>
+                    )}
                   </div>
                 </li>
               ))}
             </ul>
           </div>
           <div>
-            <div className="mb-1 text-xs text-muted">Output · scored by {method}</div>
+            <div className="mb-1 text-xs text-muted">
+              Output · scored by {method} · {run.params.mode === "batch" ? `batch mode, ${run.params.batch_size} inputs per request` : "real-time"}
+            </div>
             <div className="flex items-center gap-2">
               <span aria-hidden className="text-good-ink">⇢</span>
               <span className="min-w-0 flex-1 truncate font-mono" title={run.output_name}>

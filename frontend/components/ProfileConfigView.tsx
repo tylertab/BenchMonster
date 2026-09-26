@@ -4,7 +4,20 @@ import Link from "next/link";
 import type { ProfileVersion } from "@/lib/api";
 import { METHODS } from "./ScoringConfig";
 import { TemplateView, VariableChips } from "./TemplateView";
+import { FormatBadge } from "./InputSetEditor";
 import { Card } from "./ui";
+
+function DatasetLink({ id, available, filename }: { id: number | null; available: boolean; filename: string }) {
+  return available && id ? (
+    <Link href={`/datasets/${id}`} className="font-mono hover:text-accent">
+      {filename}
+    </Link>
+  ) : (
+    <span className="font-mono text-critical" title="This dataset was deleted">
+      {filename} (deleted)
+    </span>
+  );
+}
 
 /** Read-only view of one profile version: prompt, input sets, output expectations, models. */
 export function ProfileConfigView({ v }: { v: ProfileVersion }) {
@@ -20,47 +33,43 @@ export function ProfileConfigView({ v }: { v: ProfileVersion }) {
       </Card>
 
       <div className="grid gap-6 lg:grid-cols-2">
-        <Card title="Input sets">
+        <Card title="Inputs & expected outputs">
           <ul className="space-y-3 text-sm">
             {v.datasets.map((d) => (
-              <li key={d.position}>
+              <li key={d.position} className="rounded-md border border-line p-2.5">
                 <div className="flex items-center gap-2">
-                  <span aria-hidden className="text-muted">↳</span>
-                  {d.available ? (
-                    <Link href={`/datasets/${d.dataset_id}`} className="font-mono hover:text-accent">
-                      {d.filename}
-                    </Link>
-                  ) : (
-                    <span className="font-mono text-critical" title="This dataset was deleted">
-                      {d.filename} (deleted)
-                    </span>
-                  )}
+                  <span className="w-16 text-xs text-muted">Input</span>
+                  <FormatBadge format={d.format} />
+                  <DatasetLink id={d.dataset_id} available={d.available} filename={d.filename} />
                   {d.row_count != null && <span className="tabular text-xs text-muted">{d.row_count.toLocaleString()} rows</span>}
                 </div>
-                <div className="ml-5 mt-0.5 flex flex-wrap gap-x-3 text-xs text-ink-2">
-                  {Object.entries(d.mapping).map(([k, c]) => (
-                    <span key={k}>
-                      <code className="text-accent">{`{{${k}}}`}</code> ← {c}
+                <div className="mt-1 flex items-center gap-2">
+                  <span className="w-16 text-xs text-muted">Expected</span>
+                  {d.expected_dataset_id ? (
+                    <>
+                      <FormatBadge format={d.expected_format} />
+                      <DatasetLink id={d.expected_dataset_id} available={d.expected_available} filename={d.expected_filename ?? "?"} />
+                    </>
+                  ) : d.expected_column ? (
+                    <span className="text-xs">
+                      column <code>{d.expected_column}</code> of the input file
                     </span>
-                  ))}
+                  ) : (
+                    <span className="text-xs text-muted">none</span>
+                  )}
                 </div>
+                {d.expected_dataset_id && (
+                  <div className="ml-[4.5rem] mt-0.5 text-xs text-ink-2">
+                    matched {d.input_key ? `on ${d.input_key} = ${d.expected_key}` : "by row order"} · expected value: {d.expected_column ? `column ${d.expected_column}` : "whole row as JSON"}
+                  </div>
+                )}
               </li>
             ))}
           </ul>
         </Card>
 
-        <Card title="Output expectations">
+        <Card title="Comparison">
           <dl className="space-y-2 text-sm">
-            <div>
-              <dt className="text-xs text-muted">Expected output</dt>
-              <dd>
-                {v.datasets.map((d) => (
-                  <div key={d.position} className="text-xs">
-                    <span className="font-mono">{d.filename}</span> · {d.expected_column ? <code>{d.expected_column}</code> : <span className="text-muted">none</span>}
-                  </div>
-                ))}
-              </dd>
-            </div>
             <div>
               <dt className="text-xs text-muted">Scoring</dt>
               <dd>{method}</dd>
@@ -87,7 +96,10 @@ export function ProfileConfigView({ v }: { v: ProfileVersion }) {
         </Card>
       </div>
 
-      <Card title={`Models (${v.models.length})`} actions={<span className="text-xs text-muted">max_tokens {v.params.max_tokens} · temperature {v.params.temperature} · concurrency {v.params.concurrency}</span>}>
+      <Card
+        title={`Execution · ${v.params.mode === "batch" ? `batch, ${v.params.batch_size} inputs per request` : "real-time"} · ${v.models.length} model${v.models.length === 1 ? "" : "s"}`}
+        actions={<span className="text-xs text-muted">max_tokens {v.params.max_tokens} · temperature {v.params.temperature} · concurrency {v.params.concurrency}</span>}
+      >
         <div className="flex flex-wrap gap-1.5">
           {v.models.map((m) => (
             <span key={m.id} className={`rounded-md border border-line px-2 py-1 text-xs ${m.active ? "" : "text-muted line-through"}`} title={m.model_id}>

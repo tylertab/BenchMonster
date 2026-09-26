@@ -124,6 +124,15 @@ async def validate(dataset_id: int, body: ValidateIn, ctx: auth.Ctx = Depends(au
     return datasets.validate_rows(rows, schema)
 
 
+@router.get("/{dataset_id}/infer-schema")
+async def infer(dataset_id: int, ctx: auth.Ctx = Depends(auth.current_ctx)):
+    """A freshly inferred schema from all rows (not saved)."""
+    ds = await db.pool().fetchrow("select columns from datasets where id = $1 and org_id = $2", dataset_id, ctx.org_id)
+    if not ds:
+        raise HTTPException(404, "dataset not found")
+    return datasets.infer_schema([d for _, d in await _row_data(dataset_id)], ds["columns"])
+
+
 @router.delete("/{dataset_id}")
 async def delete_dataset(dataset_id: int, ctx: auth.Ctx = Depends(auth.current_ctx)):
     """Past runs keep their inputs, expected values, and results; only the stored rows go."""

@@ -147,7 +147,8 @@ def score_rule_based(method: str, cfg: dict, expected: str | None, output: str) 
                 wrong.append(f"{f}: got {'(missing)' if got is _MISSING else json.dumps(got)}, expected {json.dumps(exp)}")
         score = (len(fields) - len(wrong)) / len(fields)
         why = f"{len(fields) - len(wrong)}/{len(fields)} fields match" + (f"; {'; '.join(wrong[:4])}" if wrong else "")
-        return Score(score, score >= float(cfg.get("pass_threshold", 1.0)), why)
+        threshold = min(1.0, max(0.0, float(cfg.get("pass_threshold", 1.0))))
+        return Score(score, score >= threshold, why)
 
     raise ValueError(f"unknown scoring method {method!r}")
 
@@ -192,7 +193,7 @@ async def judge(cfg: dict, input_: str, expected: str | None, output: str) -> Sc
         reason = str(verdict.get("reason", ""))
     except (ValueError, KeyError, TypeError):
         return Score(0.0, False, f"judge returned unparseable output: {text[:200]}")
-    return Score(score, score >= float(cfg.get("pass_threshold", 0.7)), reason)
+    return Score(score, score >= min(1.0, max(0.0, float(cfg.get("pass_threshold", 0.7)))), reason)
 
 
 async def score(method: str, cfg: dict, input_: str, expected: str | None, output: str) -> Score:
