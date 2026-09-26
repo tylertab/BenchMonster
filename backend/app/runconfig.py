@@ -4,6 +4,7 @@ Validation renders every input up front, so a bad mapping or missing column
 fails before anything is written or any model is called.
 """
 
+import json
 import re
 from datetime import datetime, timezone
 from typing import Literal
@@ -11,6 +12,7 @@ from typing import Literal
 from fastapi import HTTPException
 from pydantic import BaseModel, Field
 
+from . import datasets as ds_lib
 from . import db, runner, scoring, templates
 
 MAX_INPUTS = 10_000
@@ -18,9 +20,18 @@ NEEDS_EXPECTED = {"exact", "contains", "numeric", "json_fields"}
 
 
 class DatasetRef(BaseModel):
+    """One input set: an input dataset and where its expected outputs come from."""
+
     dataset_id: int
-    mapping: dict[str, str] = {}  # {template variable: dataset column}
+    mapping: dict[str, str] = {}  # {template variable: input column}
+    # Expected outputs: a column of the input file, or (with expected_dataset_id) a
+    # separate dataset matched by input_key <-> expected_key, or by row order if no
+    # keys. With an expected dataset and no column, the whole row (minus the key) is
+    # the expected value, as typed JSON.
     expected_column: str | None = None
+    expected_dataset_id: int | None = None
+    input_key: str | None = None
+    expected_key: str | None = None
 
 
 class RunConfig(BaseModel):
@@ -34,15 +45,22 @@ class RunConfig(BaseModel):
     max_tokens: int = Field(4096, ge=16, le=32768)
     temperature: float = Field(0.0, ge=0, le=2)
     concurrency: int = Field(8, ge=1, le=32)
+    # "realtime": one streaming request per input. "batch": batch_size inputs are
+    # packed into one request that must return a JSON array of answers.
+    mode: Literal["realtime", "batch"] = "realtime"
+    batch_size: int = Field(10, ge=2, le=50)
 
     def params(self) -> dict:
-        return {"max_tokens": self.max_tokens, "temperature": self.temperature, "concurrency": self.concurrency}
+        return {"max_tokens": self.max_tokens, "temperature": self.temperature, "concurrency": self.concurrency,
+                "mode": self.mode, "batch_size": self.batch_size}
 
 
 class Prepared(BaseModel):
     """A validated config: datasets resolved and every input rendered."""
 
-    datasets: list[tuple]  # (position, dataset_id, name, filename, mapping, expected_column)
+    # (position, dataset_id, name, filename, mapping, expected_column,
+    #  expected_dataset_id, expected_filename, input_key, expected_key)
+    datasets: list[tuple]
     inputs: list[tuple]  # (position, row_idx, variables, prompt, expected)
 
 
@@ -73,23 +91,77 @@ async def prepare(org_id: int, cfg: RunConfig, *, render: bool = True) -> Prepar
         missing = [f"{{{{{v}}}}} → {c}" for v, c in mapping.items() if c not in cols]
         if missing:
             raise HTTPException(400, f"{ds['filename']}: no column for {', '.join(missing)}")
-        if ref.expected_column and ref.expected_column not in cols:
+        exp = None
+        if ref.expected_dataset_id:
+            exp = await pool.fetchrow(
+                "select id, filename, columns, schema from datasets where id = $1 and org_id = $2",
+                ref.expected_dataset_id, org_id,
+            )
+            if not exp:
+                raise HTTPException(404, f"expected-output dataset {ref.expected_dataset_id} not found (deleted?)")
+            if ref.expected_column and ref.expected_column not in exp["columns"]:
+                raise HTTPException(400, f"{exp['filename']}: no column {ref.expected_column!r}")
+            if bool(ref.input_key) != bool(ref.expected_key):
+                raise HTTPException(400, f"{ds['filename']}: set both key columns to match rows, or neither to match by row order")
+            if ref.input_key and ref.input_key not in cols:
+                raise HTTPException(400, f"{ds['filename']}: no key column {ref.input_key!r}")
+            if ref.expected_key and ref.expected_key not in exp["columns"]:
+                raise HTTPException(400, f"{exp['filename']}: no key column {ref.expected_key!r}")
+        elif ref.expected_column and ref.expected_column not in cols:
             raise HTTPException(400, f"{ds['filename']}: no column {ref.expected_column!r}")
-        if cfg.scoring_method in NEEDS_EXPECTED and not ref.expected_column:
-            raise HTTPException(400, f"{ds['filename']}: {cfg.scoring_method} scoring needs an expected column")
-        datasets.append((pos, ds["id"], ds["name"], ds["filename"], mapping, ref.expected_column))
+        if cfg.scoring_method in NEEDS_EXPECTED and not (ref.expected_column or exp):
+            raise HTTPException(400, f"{ds['filename']}: {cfg.scoring_method} scoring needs expected outputs")
+        datasets.append((pos, ds["id"], ds["name"], ds["filename"], mapping, ref.expected_column,
+                         exp["id"] if exp else None, exp["filename"] if exp else None,
+                         ref.input_key if exp else None, ref.expected_key if exp else None))
         if not render:
             continue
         rows = await pool.fetch("select idx, data from dataset_rows where dataset_id = $1 order by idx", ds["id"])
-        for r in rows:
+        expected_for = _expected_lookup(ref, exp, await pool.fetch(
+            "select idx, data from dataset_rows where dataset_id = $1 order by idx", exp["id"]
+        ) if exp else None)
+        unmatched = 0
+        for i, r in enumerate(rows):
             values = {v: r["data"].get(c, "") for v, c in mapping.items()}
-            expected = r["data"].get(ref.expected_column) if ref.expected_column else None
+            expected = expected_for(i, r["data"])
+            if exp and expected is None:
+                unmatched += 1
             inputs.append((pos, r["idx"], values, templates.render(cfg.template, values), expected))
+        if unmatched and cfg.scoring_method in NEEDS_EXPECTED:
+            how = f"{ref.input_key} = {ref.expected_key}" if ref.input_key else "row order"
+            raise HTTPException(400, f"{ds['filename']}: {unmatched} input rows have no expected output in {exp['filename']} (matched by {how})")
         if len(inputs) > MAX_INPUTS:
             raise HTTPException(400, f"too many inputs ({len(inputs)}+); the limit is {MAX_INPUTS}")
     if render and not inputs:
         raise HTTPException(400, "the selected datasets have no rows")
     return Prepared(datasets=datasets, inputs=inputs)
+
+
+def _expected_lookup(ref: DatasetRef, exp, exp_rows):
+    """(input position, input row) -> expected value string, or None if unmatched."""
+    if not exp:
+        return lambda i, row: (row.get(ref.expected_column) if ref.expected_column else None)
+    schema = exp["schema"]
+    if schema is None:
+        schema = ds_lib.infer_schema([r["data"] for r in exp_rows], exp["columns"])
+
+    def value(er: dict) -> str:
+        if ref.expected_column:
+            return er.get(ref.expected_column, "")
+        return json.dumps(ds_lib.typed_row(er, schema, drop=(ref.expected_key,) if ref.expected_key else ()))
+
+    if ref.input_key:
+        by_key: dict[str, dict] = {}
+        for r in exp_rows:
+            by_key.setdefault(str(r["data"].get(ref.expected_key, "")).strip(), r["data"])
+
+        def lookup(i, row):
+            er = by_key.get(str(row.get(ref.input_key, "")).strip())
+            return value(er) if er is not None else None
+        return lookup
+
+    ordered = [r["data"] for r in exp_rows]
+    return lambda i, row: value(ordered[i]) if i < len(ordered) else None
 
 
 def _slug(s: str) -> str:
@@ -119,8 +191,9 @@ async def create_run(
             output_name(output, label or cfg.prompt_name), user_id, profile_id, profile_version,
         )
         await conn.executemany(
-            """insert into run_datasets (run_id, position, dataset_id, dataset_name, filename, mapping, expected_column)
-               values ($1, $2, $3, $4, $5, $6, $7)""",
+            """insert into run_datasets (run_id, position, dataset_id, dataset_name, filename, mapping, expected_column,
+                   expected_dataset_id, expected_filename, input_key, expected_key)
+               values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)""",
             [(run_id, *d) for d in prepared.datasets],
         )
         await conn.executemany(

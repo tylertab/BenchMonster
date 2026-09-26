@@ -95,6 +95,7 @@ async def list_runs(
 async def _datasets(run_id: int) -> list[dict]:
     rows = await db.pool().fetch(
         """select rd.position, rd.dataset_id, rd.dataset_name, rd.filename, rd.mapping, rd.expected_column,
+                  rd.expected_dataset_id, rd.expected_filename, rd.input_key, rd.expected_key,
                   (select count(*) from run_inputs ri where ri.run_id = rd.run_id and ri.dataset_position = rd.position) as rows
            from run_datasets rd where rd.run_id = $1 order by rd.position""",
         run_id,
