@@ -1,10 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
-import { DatasetPicker, guessExpected, type InputSet, InputSetCard, inputSetProblems, toRef } from "@/components/InputSetEditor";
+import { useEffect, useRef, useState } from "react";
+import { DatasetPicker, ExpectedOutputCard, guessExpected, InputFileCard, type InputSet, inputSetProblems, toRef } from "@/components/InputSetEditor";
 import { DEFAULT_PARAMS, ModelPicker } from "@/components/ModelPicker";
-import { buildScoringConfig, DEFAULT_SCORING, METHODS, ScoringConfig, scoringStateFrom, type ScoringState } from "@/components/ScoringConfig";
+import { buildScoringConfig, DEFAULT_SCORING, METHODS, OutputProcessing, ScoringConfig, scoringStateFrom, type ScoringState } from "@/components/ScoringConfig";
 import { VariableChips } from "@/components/TemplateView";
 import { Button, Card, compactInputClass, Empty, ErrorNote, Field, inputClass } from "@/components/ui";
 import { api, type Dataset, type DatasetDetail, type ProfileConfig, type Prompt, type RunMode, type RunParams, type ScoringMethod } from "@/lib/api";
@@ -81,6 +81,21 @@ export function ProfileEditor({
   const [runMode, setRunMode] = useState<RunMode>(initial?.config.mode ?? "realtime");
   const [batchSize, setBatchSize] = useState(initial?.config.batch_size ?? 10);
   const [note, setNote] = useState("");
+  const templateRef = useRef<HTMLTextAreaElement>(null);
+
+  // Insert {{column}} at the cursor in the template.
+  const insertVariable = (name: string) => {
+    const el = templateRef.current;
+    const token = `{{${name}}}`;
+    if (!el) return setTemplate((t) => t + token);
+    const { selectionStart: a, selectionEnd: b } = el;
+    const next = template.slice(0, a) + token + template.slice(b);
+    setTemplate(next);
+    requestAnimationFrame(() => {
+      el.focus();
+      el.setSelectionRange(a + token.length, a + token.length);
+    });
+  };
 
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -150,7 +165,7 @@ export function ProfileEditor({
   if (variables.length === 0) problems.push("The template needs at least one {{variable}}.");
   for (const s of resolved) {
     const unmapped = variables.filter((v) => !s.mapping[v]);
-    if (unmapped.length) problems.push(`${s.input.filename}: map ${unmapped.map((v) => `{{${v}}}`).join(", ")} in the Prompt section.`);
+    if (unmapped.length) problems.push(`${s.input.filename}: map ${unmapped.map((v) => `{{${v}}}`).join(", ")} in the Inputs section.`);
   }
   if (modelIds.length === 0) problems.push("Pick at least one model.");
 
@@ -198,17 +213,47 @@ export function ProfileEditor({
   return (
     <div className="space-y-6">
       <Section n={1} title="Profile">
-        <div className="grid gap-3 sm:grid-cols-2">
-          <Field label="Name">
-            <input className={inputClass} value={name} onChange={(e) => setName(e.target.value)} placeholder="Support ticket triage" />
-          </Field>
-          <Field label="Description" hint="Optional">
-            <input className={inputClass} value={description} onChange={(e) => setDescription(e.target.value)} placeholder="What this benchmark measures" />
-          </Field>
+        <div className="space-y-4">
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Field label="Name">
+              <input className={inputClass} value={name} onChange={(e) => setName(e.target.value)} placeholder="Support ticket triage" />
+            </Field>
+            <Field label="Description" hint="Optional">
+              <input className={inputClass} value={description} onChange={(e) => setDescription(e.target.value)} placeholder="What this benchmark measures" />
+            </Field>
+          </div>
+          <div>
+            <span className="mb-1.5 block text-sm font-medium">Run mode</span>
+            <div className="grid gap-2 sm:grid-cols-2">
+              {(
+                [
+                  ["realtime", "Real-time", "One streaming request per input, in parallel. Measures per-input latency and time to first token."],
+                  ["batch", "Batch (packed prompts)", "Several inputs per request; the model returns a JSON array of answers. Tests batch handling; shares tokens and cost."],
+                ] as [RunMode, string, string][]
+              ).map(([value, label, desc]) => (
+                <button
+                  key={value}
+                  type="button"
+                  onClick={() => setRunMode(value)}
+                  className={`rounded-md border p-2.5 text-left text-sm ${runMode === value ? "border-accent bg-accent/5" : "border-line hover:bg-surface-2"}`}
+                >
+                  <span className="block font-medium">{label}</span>
+                  <span className="mt-0.5 block text-xs text-ink-2">{desc}</span>
+                </button>
+              ))}
+            </div>
+            {runMode === "batch" && (
+              <label className="mt-2 flex items-center gap-2 text-sm">
+                <span className="text-ink-2">Inputs per request</span>
+                <input type="number" min={2} max={50} aria-label="Inputs per request" className={`${compactInputClass} w-20`} value={batchSize} onChange={(e) => setBatchSize(Math.max(2, Math.min(50, Number(e.target.value) || 2)))} />
+                <span className="text-xs text-muted">Max tokens (section 5) is per input; a request gets max tokens × inputs.</span>
+              </label>
+            )}
+          </div>
         </div>
       </Section>
 
-      <Section n={2} title="Inputs & expected outputs" subtitle="datasets">
+      <Section n={2} title="Inputs" subtitle="what is fed into the prompt">
         <div className="space-y-3">
           {missing > 0 && (
             <p className="rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-sm">
@@ -216,13 +261,12 @@ export function ProfileEditor({
             </p>
           )}
           {resolved.map((s) => (
-            <InputSetCard
+            <InputFileCard
               key={s.key}
               set={s}
-              datasets={datasets}
+              variables={variables}
               onChange={(next) => updateSet(s.key, next)}
               onRemove={() => setSets((cur) => cur.filter((x) => x.key !== s.key))}
-              onUploaded={addUploaded}
             />
           ))}
           {adding ? (
@@ -257,8 +301,42 @@ export function ProfileEditor({
         </div>
       </Section>
 
+      <Section n={3} title="Expected outputs" subtitle="how model replies are processed and compared">
+        <div className="space-y-5">
+          <div className="space-y-2">
+            <h3 className="text-sm font-medium">Expected values</h3>
+            {resolved.length === 0 ? (
+              <p className="text-xs text-muted">Add an input first; each input gets its own expected outputs.</p>
+            ) : (
+              resolved.map((s) => <ExpectedOutputCard key={s.key} set={s} datasets={datasets} onChange={(next) => updateSet(s.key, next)} onUploaded={addUploaded} />)
+            )}
+          </div>
+          <div className="space-y-2">
+            <h3 className="text-sm font-medium">Processing the model&apos;s reply</h3>
+            <OutputProcessing state={scoring} onChange={setScoring} />
+          </div>
+          <div className="space-y-2">
+            <h3 className="text-sm font-medium">Comparison with the expected value</h3>
+            <div className="grid gap-2 sm:grid-cols-3">
+              {METHODS.map((m) => (
+                <button
+                  type="button"
+                  key={m.value}
+                  onClick={() => setMethod(m.value)}
+                  className={`rounded-md border p-2.5 text-left text-sm ${method === m.value ? "border-accent bg-accent/5" : "border-line hover:bg-surface-2"}`}
+                >
+                  <span className="block font-medium">{m.label}</span>
+                  <span className="mt-0.5 block text-xs text-ink-2">{m.description}</span>
+                </button>
+              ))}
+            </div>
+            <ScoringConfig method={method} state={scoring} onChange={setScoring} />
+          </div>
+        </div>
+      </Section>
+
       <Section
-        n={3}
+        n={4}
         title="Prompt"
         actions={
           prompts.length > 0 && (
@@ -288,40 +366,23 @@ export function ProfileEditor({
           <Field label="System prompt" hint="Optional">
             <textarea rows={2} className={inputClass} value={systemPrompt} onChange={(e) => setSystemPrompt(e.target.value)} />
           </Field>
-          <Field label="Template" hint="{{variable}} placeholders are filled from each input's columns">
-            <textarea rows={10} className={`${inputClass} font-mono text-xs`} value={template} onChange={(e) => setTemplate(e.target.value)} />
+          <Field label="Template" hint="{{variable}} placeholders are filled from the input columns mapped in section 2">
+            <textarea ref={templateRef} rows={10} className={`${inputClass} font-mono text-xs`} value={template} onChange={(e) => setTemplate(e.target.value)} />
           </Field>
+          {resolved.length > 0 && (
+            <div className="flex flex-wrap items-center gap-1.5 text-xs">
+              <span className="text-ink-2">Insert an input column:</span>
+              {[...new Set(resolved.flatMap((s) => s.input.columns))].map((c) => (
+                <button key={c} type="button" onClick={() => insertVariable(c)} className="rounded bg-surface-2 px-1.5 py-0.5 font-mono hover:bg-accent/10 hover:text-accent">
+                  {`{{${c}}}`}
+                </button>
+              ))}
+            </div>
+          )}
           <div className="flex items-center gap-2 text-sm">
             <span className="text-ink-2">Variables:</span>
             {variables.length ? <VariableChips variables={variables} /> : <span className="text-critical">none yet</span>}
           </div>
-
-          {variables.length > 0 &&
-            resolved.map((s) => (
-              <div key={s.key} className="rounded-md border border-line p-2.5">
-                <div className="mb-1.5 font-mono text-xs text-ink-2">{s.input.filename}</div>
-                <div className="grid gap-2 sm:grid-cols-2">
-                  {variables.map((v) => (
-                    <label key={v} className="flex items-center gap-2 text-sm">
-                      <code className="w-32 shrink-0 truncate text-xs text-accent">{`{{${v}}}`}</code>
-                      <span className="text-muted">←</span>
-                      <select
-                        className={`${compactInputClass} min-w-0 flex-1 ${s.mapping[v] ? "" : "border-critical"}`}
-                        value={s.mapping[v]}
-                        onChange={(e) => updateSet(s.key, { ...s, mapping: { ...s.mapping, [v]: e.target.value } })}
-                        aria-label={`Column for ${v} in ${s.input.filename}`}
-                      >
-                        <option value="">choose column…</option>
-                        {s.input.columns.map((c) => (
-                          <option key={c}>{c}</option>
-                        ))}
-                      </select>
-                    </label>
-                  ))}
-                </div>
-              </div>
-            ))}
-
           {previewValues && (
             <div>
               <div className="mb-1 text-xs text-muted">Preview: first input of {resolved[0].input.filename}</div>
@@ -331,54 +392,8 @@ export function ProfileEditor({
         </div>
       </Section>
 
-      <Section n={4} title="Comparison" subtitle="how outputs are scored against expected outputs">
-        <div className="space-y-3">
-          <div className="grid gap-2 sm:grid-cols-3">
-            {METHODS.map((m) => (
-              <button
-                type="button"
-                key={m.value}
-                onClick={() => setMethod(m.value)}
-                className={`rounded-md border p-2.5 text-left text-sm ${method === m.value ? "border-accent bg-accent/5" : "border-line hover:bg-surface-2"}`}
-              >
-                <span className="block font-medium">{m.label}</span>
-                <span className="mt-0.5 block text-xs text-ink-2">{m.description}</span>
-              </button>
-            ))}
-          </div>
-          <ScoringConfig method={method} state={scoring} onChange={setScoring} />
-        </div>
-      </Section>
-
-      <Section n={5} title="Execution" subtitle="models and how requests are sent">
-        <div className="space-y-4">
-          <div className="grid gap-2 sm:grid-cols-2">
-            {(
-              [
-                ["realtime", "Real-time", "One streaming request per input, in parallel. Measures per-input latency and time to first token."],
-                ["batch", "Batch (packed prompts)", "Several inputs per request; the model returns a JSON array of answers. Tests batch handling; shares tokens and cost."],
-              ] as [RunMode, string, string][]
-            ).map(([value, label, desc]) => (
-              <button
-                key={value}
-                type="button"
-                onClick={() => setRunMode(value)}
-                className={`rounded-md border p-2.5 text-left text-sm ${runMode === value ? "border-accent bg-accent/5" : "border-line hover:bg-surface-2"}`}
-              >
-                <span className="block font-medium">{label}</span>
-                <span className="mt-0.5 block text-xs text-ink-2">{desc}</span>
-              </button>
-            ))}
-          </div>
-          {runMode === "batch" && (
-            <label className="flex items-center gap-2 text-sm">
-              <span className="text-ink-2">Inputs per request</span>
-              <input type="number" min={2} max={50} aria-label="Inputs per request" className={`${compactInputClass} w-20`} value={batchSize} onChange={(e) => setBatchSize(Math.max(2, Math.min(50, Number(e.target.value) || 2)))} />
-              <span className="text-xs text-muted">Max tokens below is per input; a request gets max tokens × inputs.</span>
-            </label>
-          )}
-          <ModelPicker selected={modelIds} onChange={setModelIds} params={runParams} onParamsChange={setRunParams} />
-        </div>
+      <Section n={5} title="Models">
+        <ModelPicker selected={modelIds} onChange={setModelIds} params={runParams} onParamsChange={setRunParams} />
       </Section>
 
       {mode === "edit" && (

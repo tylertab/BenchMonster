@@ -94,6 +94,12 @@ export function ResultsExplorer({ runId, models, refreshKey }: { runId: number; 
                           <div>
                             <dt className="text-xs text-muted">Output</dt>
                             <dd className="whitespace-pre-wrap">{r.output || "–"}</dd>
+                            {r.processed_output != null && r.processed_output !== (r.output ?? "").trim() && (
+                              <>
+                                <dt className="mt-2 text-xs text-muted">Compared value (after processing)</dt>
+                                <dd className="whitespace-pre-wrap font-mono text-xs">{r.processed_output}</dd>
+                              </>
+                            )}
                           </div>
                           {(r.judge_rationale || r.error) && (
                             <div className="md:col-span-3">

@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { api, ApiError, type QueryResult, type SavedQuery, type SchemaTable } from "@/lib/api";
 import type { Preset } from "@/lib/bmquery";
+import { saveBlob } from "@/lib/download";
 import { Button, Card, ErrorNote, inputClass } from "./ui";
 
 function cell(v: unknown) {
@@ -51,6 +52,21 @@ export function SqlConsole({ presets, sql, onSqlChange }: { presets: Preset[]; s
   // Saved queries (shared across the org). `active` is the one loaded in the editor.
   // "Save as…" always creates a new query; only "Update" overwrites the active one.
   const [saved, setSaved] = useState<SavedQuery[]>([]);
+  const [resultSql, setResultSql] = useState("");
+  const [exporting, setExporting] = useState<"csv" | "json" | null>(null);
+
+  const download = async (format: "csv" | "json") => {
+    setExporting(format);
+    setError(null);
+    try {
+      const f = await api.exportQuery(resultSql, format, active && resultSql === active.sql ? active.name : undefined);
+      saveBlob(f.blob, f.filename);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setExporting(null);
+    }
+  };
   const [active, setActive] = useState<SavedQuery | null>(null);
   const [saveName, setSaveName] = useState<string | null>(null); // non-null = "Save as" form open
   const refreshSaved = () => api.savedQueries().then(setSaved);
@@ -119,7 +135,10 @@ export function SqlConsole({ presets, sql, onSqlChange }: { presets: Preset[]; s
     api.schema().then(setSchema);
     api.savedQueries().then(setSaved);
     // Show the default query's result on first load.
-    api.query(sql).then(setResult, () => {});
+    api.query(sql).then((r) => {
+      setResult(r);
+      setResultSql(sql);
+    }, () => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -128,6 +147,7 @@ export function SqlConsole({ presets, sql, onSqlChange }: { presets: Preset[]; s
     setError(null);
     try {
       setResult(await api.query(text));
+      setResultSql(text);
     } catch (e) {
       setResult(null);
       setError((e as Error).message);
@@ -267,7 +287,7 @@ export function SqlConsole({ presets, sql, onSqlChange }: { presets: Preset[]; s
             )}
             {result && (
               <span className="ml-auto text-xs text-ink-2">
-                {result.row_count} rows{result.truncated && " (truncated)"} · {result.elapsed_ms}ms
+                {result.row_count} rows{result.truncated && " (showing first 1,000)"} · {result.elapsed_ms}ms
               </span>
             )}
           </div>
@@ -276,7 +296,20 @@ export function SqlConsole({ presets, sql, onSqlChange }: { presets: Preset[]; s
 
       <div className="mt-3">
         <ErrorNote error={error} />
-        {result && result.columns.length > 0 && <ResultTable columns={result.columns.map((c) => c.name)} rows={result.rows} />}
+        {result && result.columns.length > 0 && (
+          <>
+            <div className="mb-1.5 flex items-center justify-end gap-2 text-xs">
+              <span className="text-muted">Download{result.truncated ? " all rows (up to 50,000)" : ""}:</span>
+              <Button variant="secondary" className="px-2 py-1 text-xs" onClick={() => download("csv")} disabled={exporting !== null}>
+                {exporting === "csv" ? "…" : "⬇ CSV"}
+              </Button>
+              <Button variant="secondary" className="px-2 py-1 text-xs" onClick={() => download("json")} disabled={exporting !== null}>
+                {exporting === "json" ? "…" : "⬇ JSON"}
+              </Button>
+            </div>
+            <ResultTable columns={result.columns.map((c) => c.name)} rows={result.rows} />
+          </>
+        )}
       </div>
     </Card>
   );

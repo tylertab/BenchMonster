@@ -3,6 +3,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { api, type ChatMessage, type ToolCall } from "@/lib/api";
 import { type BMQueryScope, scopeKey, suggestions } from "@/lib/bmquery";
+import { saveBlob, toCsv } from "@/lib/download";
 import { useVoice } from "@/lib/useVoice";
 import { ResultTable } from "./SqlConsole";
 import { Button, Card } from "./ui";
@@ -53,9 +54,16 @@ function ToolCallView({ call, onOpenSql }: { call: ToolCall; onOpenSql: (sql: st
         <div className="space-y-2 border-t border-line p-2.5">
           <pre className="overflow-x-auto whitespace-pre-wrap font-mono">{call.sql}</pre>
           {call.error ? <p className="text-critical">{call.error}</p> : call.columns && <ResultTable columns={call.columns} rows={call.rows ?? []} />}
-          <Button variant="secondary" onClick={() => onOpenSql(call.sql)}>
-            Open in SQL console
-          </Button>
+          <div className="flex gap-2">
+            <Button variant="secondary" onClick={() => onOpenSql(call.sql)}>
+              Open in SQL console
+            </Button>
+            {call.columns && (
+              <Button variant="ghost" onClick={() => saveBlob(new Blob([toCsv(call.columns!, call.rows ?? [])], { type: "text/csv" }), "bmquery-analyst-result.csv")}>
+                ⬇ CSV
+              </Button>
+            )}
+          </div>
         </div>
       )}
     </div>

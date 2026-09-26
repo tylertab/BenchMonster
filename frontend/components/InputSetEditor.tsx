@@ -94,12 +94,76 @@ export function DatasetPicker({ datasets, onPick, onUploaded, onCancel, title }:
   );
 }
 
-/** One input set card: the input file and its expected outputs. */
-export function InputSetCard({ set, datasets, onChange, onRemove, onUploaded }: {
+/** Section 2 card: an input file and which prompt variable each of its columns feeds. */
+export function InputFileCard({ set, variables, onChange, onRemove }: {
+  set: InputSet;
+  variables: string[];
+  onChange: (s: InputSet) => void;
+  onRemove: () => void;
+}) {
+  const feeds = (col: string) => variables.filter((v) => set.mapping[v] === col);
+  const props = set.input.schema?.properties ?? {};
+  return (
+    <div className="rounded-md border border-line p-3">
+      <div className="flex items-center gap-2 text-sm">
+        <FormatBadge format={set.input.format} />
+        <span className="font-mono font-medium">{set.input.filename}</span>
+        <span className="text-xs text-muted">{set.input.row_count.toLocaleString()} rows → {set.input.row_count.toLocaleString()} prompts</span>
+        <button type="button" className="ml-auto text-xs text-muted hover:text-critical" onClick={onRemove}>
+          Remove
+        </button>
+      </div>
+      {set.input.description && <p className="mt-0.5 text-xs text-ink-2">{set.input.description}</p>}
+
+      {variables.length === 0 ? (
+        <p className="mt-2 text-xs text-muted">Write the prompt (section 4); each {"{{variable}}"} in it is filled from a column here.</p>
+      ) : (
+        <div className="mt-2 grid gap-2 sm:grid-cols-2">
+          {variables.map((v) => (
+            <label key={v} className="flex items-center gap-2 text-sm">
+              <code className="w-32 shrink-0 truncate text-xs text-accent">{`{{${v}}}`}</code>
+              <span className="text-muted">←</span>
+              <select
+                className={`${compactInputClass} min-w-0 flex-1 ${set.mapping[v] ? "" : "border-critical"}`}
+                value={set.mapping[v] ?? ""}
+                onChange={(e) => onChange({ ...set, mapping: { ...set.mapping, [v]: e.target.value } })}
+                aria-label={`Column for ${v} in ${set.input.filename}`}
+              >
+                <option value="">choose column…</option>
+                {set.input.columns.map((c) => (
+                  <option key={c}>{c}</option>
+                ))}
+              </select>
+            </label>
+          ))}
+        </div>
+      )}
+
+      <div className="mt-2 flex flex-wrap gap-1">
+        {set.input.columns.map((c) => {
+          const f = feeds(c);
+          return (
+            <span
+              key={c}
+              title={props[c]?.description}
+              className={`rounded px-1.5 py-0.5 font-mono text-xs ${f.length ? "bg-accent/10 text-accent" : "bg-surface-2 text-muted"}`}
+            >
+              {c}
+              {props[c]?.type && <span className="ml-1 opacity-70">{props[c].type}</span>}
+              {f.length > 0 ? ` → ${f.map((v) => `{{${v}}}`).join(", ")}` : variables.length ? " · not used" : ""}
+            </span>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/** Section 3 card: where an input's expected outputs come from, and how rows are matched. */
+export function ExpectedOutputCard({ set, datasets, onChange, onUploaded }: {
   set: InputSet;
   datasets: Dataset[];
   onChange: (s: InputSet) => void;
-  onRemove: () => void;
   onUploaded: (d: Dataset) => void;
 }) {
   const [picking, setPicking] = useState(false);
@@ -112,20 +176,10 @@ export function InputSetCard({ set, datasets, onChange, onRemove, onUploaded }: 
 
   return (
     <div className="rounded-md border border-line p-3">
-      <div className="flex items-center gap-2 text-sm">
-        <span className="text-xs text-muted">Input</span>
-        <FormatBadge format={set.input.format} />
-        <span className="font-mono font-medium">{set.input.filename}</span>
-        <span className="text-xs text-muted">{set.input.row_count.toLocaleString()} rows</span>
-        <button type="button" className="ml-auto text-xs text-muted hover:text-critical" onClick={onRemove}>
-          Remove
-        </button>
-      </div>
-      <div className="mt-0.5 truncate font-mono text-xs text-muted">{set.input.columns.join(", ")}</div>
-
-      <div className="mt-3 border-t border-line pt-3">
-        <div className="flex flex-wrap items-center gap-2 text-sm">
-          <span className="text-xs text-muted">Expected outputs</span>
+      <div className="flex flex-wrap items-center gap-2 text-sm">
+        <span className="text-xs text-muted">For</span>
+        <span className="font-mono text-xs font-medium">{set.input.filename}</span>
+        <span className="ml-auto flex flex-wrap gap-1.5">
           {(["dataset", "column", "none"] as ExpectedSource[]).map((src) => (
             <button
               key={src}
@@ -133,104 +187,107 @@ export function InputSetCard({ set, datasets, onChange, onRemove, onUploaded }: 
               onClick={() =>
                 src === "dataset" && !exp
                   ? setPicking(true)
-                  : onChange({ ...set, expectedSource: src, expectedColumn: src === "column" ? guessExpected(set.input.columns) : set.expectedColumn })
+                  : onChange({ ...set, expectedSource: src, expectedColumn: src === "column" ? set.expectedColumn || guessExpected(set.input.columns) : set.expectedColumn })
               }
               className={`rounded-full border px-2.5 py-0.5 text-xs ${set.expectedSource === src ? "border-accent bg-accent/10 text-accent" : "border-line text-ink-2 hover:bg-surface-2"}`}
             >
-              {src === "dataset" ? "Separate file" : src === "column" ? "Column in this file" : "None"}
+              {src === "dataset" ? "Separate file" : src === "column" ? "Column in the input file" : "None"}
             </button>
           ))}
+        </span>
+      </div>
+
+      {picking && (
+        <div className="mt-2">
+          <DatasetPicker
+            title="Choose the expected-output file"
+            datasets={datasets.filter((d) => d.id !== set.input.id)}
+            onPick={pickExpected}
+            onUploaded={(d) => {
+              onUploaded(d);
+              pickExpected(d);
+            }}
+            onCancel={() => setPicking(false)}
+          />
         </div>
+      )}
 
-        {picking && (
-          <div className="mt-2">
-            <DatasetPicker
-              title="Choose the expected-output file"
-              datasets={datasets.filter((d) => d.id !== set.input.id)}
-              onPick={pickExpected}
-              onUploaded={(d) => {
-                onUploaded(d);
-                pickExpected(d);
-              }}
-              onCancel={() => setPicking(false)}
-            />
+      {set.expectedSource === "none" && !picking && (
+        <p className="mt-2 text-xs text-muted">No expected outputs: only an LLM judge with a rubric (or regex / JSON schema checks) can score these.</p>
+      )}
+
+      {set.expectedSource === "column" && (
+        <label className="mt-2 flex items-center gap-2 text-sm">
+          <span className="text-xs text-ink-2">Column</span>
+          <select className={compactInputClass} value={set.expectedColumn} onChange={(e) => onChange({ ...set, expectedColumn: e.target.value })} aria-label="Expected column">
+            <option value="">choose…</option>
+            {set.input.columns.map((c) => (
+              <option key={c}>{c}</option>
+            ))}
+          </select>
+        </label>
+      )}
+
+      {set.expectedSource === "dataset" && exp && !picking && (
+        <div className="mt-2 space-y-2 rounded-md bg-surface-2/50 p-2.5 text-sm">
+          <div className="flex items-center gap-2">
+            <FormatBadge format={exp.format} />
+            <span className="font-mono font-medium">{exp.filename}</span>
+            <span className="text-xs text-muted">{exp.row_count.toLocaleString()} rows</span>
+            <button type="button" className="ml-auto text-xs text-accent hover:underline" onClick={() => setPicking(true)}>
+              Change
+            </button>
           </div>
-        )}
-
-        {set.expectedSource === "column" && (
-          <label className="mt-2 flex items-center gap-2 text-sm">
-            <span className="text-xs text-ink-2">Column</span>
-            <select className={compactInputClass} value={set.expectedColumn} onChange={(e) => onChange({ ...set, expectedColumn: e.target.value })} aria-label="Expected column">
-              <option value="">choose…</option>
-              {set.input.columns.map((c) => (
-                <option key={c}>{c}</option>
-              ))}
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="w-24 text-xs text-ink-2">Match rows</span>
+            <select
+              className={compactInputClass}
+              value={set.matchBy}
+              onChange={(e) => {
+                const matchBy = e.target.value as "key" | "order";
+                const key = guessKey(set.input.columns, exp.columns);
+                onChange({ ...set, matchBy, inputKey: set.inputKey || key, expectedKey: set.expectedKey || key });
+              }}
+              aria-label="Match rows by"
+            >
+              <option value="key">by key column</option>
+              <option value="order">by row order</option>
             </select>
-          </label>
-        )}
-
-        {set.expectedSource === "dataset" && exp && !picking && (
-          <div className="mt-2 space-y-2 rounded-md bg-surface-2/50 p-2.5 text-sm">
-            <div className="flex items-center gap-2">
-              <FormatBadge format={exp.format} />
-              <span className="font-mono font-medium">{exp.filename}</span>
-              <span className="text-xs text-muted">{exp.row_count.toLocaleString()} rows</span>
-              <button type="button" className="ml-auto text-xs text-accent hover:underline" onClick={() => setPicking(true)}>
-                Change
-              </button>
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="w-24 text-xs text-ink-2">Match rows</span>
-              <select
-                className={compactInputClass}
-                value={set.matchBy}
-                onChange={(e) => {
-                  const matchBy = e.target.value as "key" | "order";
-                  const key = guessKey(set.input.columns, exp.columns);
-                  onChange({ ...set, matchBy, inputKey: set.inputKey || key, expectedKey: set.expectedKey || key });
-                }}
-                aria-label="Match rows by"
-              >
-                <option value="key">by key column</option>
-                <option value="order">by row order</option>
-              </select>
-              {set.matchBy === "key" && (
-                <>
-                  <select className={`${compactInputClass} ${set.inputKey ? "" : "border-critical"}`} value={set.inputKey} onChange={(e) => onChange({ ...set, inputKey: e.target.value })} aria-label="Input key column">
-                    <option value="">input column…</option>
-                    {set.input.columns.map((c) => (
-                      <option key={c}>{c}</option>
-                    ))}
-                  </select>
-                  <span className="text-muted">=</span>
-                  <select className={`${compactInputClass} ${set.expectedKey ? "" : "border-critical"}`} value={set.expectedKey} onChange={(e) => onChange({ ...set, expectedKey: e.target.value })} aria-label="Expected key column">
-                    <option value="">expected column…</option>
-                    {exp.columns.map((c) => (
-                      <option key={c}>{c}</option>
-                    ))}
-                  </select>
-                </>
-              )}
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="w-24 text-xs text-ink-2">Expected value</span>
-              <select className={compactInputClass} value={set.expectedValue} onChange={(e) => onChange({ ...set, expectedValue: e.target.value as "row" | "column" })} aria-label="Expected value">
-                <option value="row">whole row as JSON{set.matchBy === "key" && set.expectedKey ? ` (without ${set.expectedKey})` : ""}</option>
-                <option value="column">one column</option>
-              </select>
-              {set.expectedValue === "column" && (
-                <select className={`${compactInputClass} ${set.expectedColumn ? "" : "border-critical"}`} value={set.expectedColumn} onChange={(e) => onChange({ ...set, expectedColumn: e.target.value })} aria-label="Expected value column">
-                  <option value="">choose…</option>
+            {set.matchBy === "key" && (
+              <>
+                <select className={`${compactInputClass} ${set.inputKey ? "" : "border-critical"}`} value={set.inputKey} onChange={(e) => onChange({ ...set, inputKey: e.target.value })} aria-label="Input key column">
+                  <option value="">input column…</option>
+                  {set.input.columns.map((c) => (
+                    <option key={c}>{c}</option>
+                  ))}
+                </select>
+                <span className="text-muted">=</span>
+                <select className={`${compactInputClass} ${set.expectedKey ? "" : "border-critical"}`} value={set.expectedKey} onChange={(e) => onChange({ ...set, expectedKey: e.target.value })} aria-label="Expected key column">
+                  <option value="">expected column…</option>
                   {exp.columns.map((c) => (
                     <option key={c}>{c}</option>
                   ))}
                 </select>
-              )}
-            </div>
-            {set.expectedValue === "row" && <p className="text-xs text-muted">Pairs well with JSON field match scoring.</p>}
+              </>
+            )}
           </div>
-        )}
-      </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="w-24 text-xs text-ink-2">Expected value</span>
+            <select className={compactInputClass} value={set.expectedValue} onChange={(e) => onChange({ ...set, expectedValue: e.target.value as "row" | "column" })} aria-label="Expected value">
+              <option value="row">whole row as JSON{set.matchBy === "key" && set.expectedKey ? ` (without ${set.expectedKey})` : ""}</option>
+              <option value="column">one column</option>
+            </select>
+            {set.expectedValue === "column" && (
+              <select className={`${compactInputClass} ${set.expectedColumn ? "" : "border-critical"}`} value={set.expectedColumn} onChange={(e) => onChange({ ...set, expectedColumn: e.target.value })} aria-label="Expected value column">
+                <option value="">choose…</option>
+                {exp.columns.map((c) => (
+                  <option key={c}>{c}</option>
+                ))}
+              </select>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

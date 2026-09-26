@@ -1,6 +1,7 @@
 // Typed client for the FastAPI backend (same-origin /api).
 
 import { type BMQueryScope, scopeParams } from "./bmquery";
+import { filenameFrom } from "./download";
 
 export type Model = {
   id: number;
@@ -269,6 +270,7 @@ export type Result = {
   prompt: string;
   expected: string | null;
   output: string | null;
+  processed_output: string | null;
   score: number | null;
   passed: boolean | null;
   judge_rationale: string | null;
@@ -431,6 +433,22 @@ export const api = {
   predictionsUrl: (id: number | string) => `/api/runs/${id}/predictions`,
 
   query: (sql: string) => post<QueryResult>("/query", { sql }),
+  /** Run SQL and download every row (up to 50,000) as CSV or JSON. */
+  exportQuery: async (sql: string, format: "csv" | "json", filename?: string) => {
+    const res = await fetch("/api/query/export", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ sql, format, filename }),
+    });
+    if (!res.ok) {
+      let detail = `${res.status} ${res.statusText}`;
+      try {
+        detail = (await res.json()).detail ?? detail;
+      } catch {}
+      throw new ApiError(detail, res.status);
+    }
+    return { blob: await res.blob(), filename: filenameFrom(res, `bmquery.${format}`), rows: Number(res.headers.get("x-row-count") ?? 0) };
+  },
   schema: () => request<SchemaTable[]>("/query/schema"),
   savedQueries: () => request<SavedQuery[]>("/saved-queries"),
   saveQuery: (name: string, sql: string) => post<SavedQuery>("/saved-queries", { name, sql }),

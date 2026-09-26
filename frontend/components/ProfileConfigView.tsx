@@ -2,9 +2,9 @@
 
 import Link from "next/link";
 import type { ProfileVersion } from "@/lib/api";
+import { FormatBadge } from "./InputSetEditor";
 import { METHODS } from "./ScoringConfig";
 import { TemplateView, VariableChips } from "./TemplateView";
-import { FormatBadge } from "./InputSetEditor";
 import { Card } from "./ui";
 
 function DatasetLink({ id, available, filename }: { id: number | null; available: boolean; filename: string }) {
@@ -19,36 +19,71 @@ function DatasetLink({ id, available, filename }: { id: number | null; available
   );
 }
 
-/** Read-only view of one profile version: prompt, input sets, output expectations, models. */
+function describeExtract(ex: Record<string, unknown> | undefined): string {
+  if (!ex || ex.type === "none" || !ex.type) return "Use the reply as is (trimmed)";
+  if (ex.type === "json_field") return `Take JSON field "${ex.path}" from the reply`;
+  if (ex.type === "regex") return `Extract with regex /${ex.pattern}/${ex.group != null ? ` (group ${ex.group})` : ""}`;
+  return String(ex.type);
+}
+
+/** Read-only view of one profile version, in the same order as the editor. */
 export function ProfileConfigView({ v }: { v: ProfileVersion }) {
   const method = METHODS.find((m) => m.value === v.scoring_method)?.label ?? v.scoring_method;
   const cfg = v.scoring_config as Record<string, unknown>;
+  const batch = v.params.mode === "batch";
   return (
     <div className="space-y-6">
-      <Card title={`Prompt · ${v.prompt_name}`} actions={<VariableChips variables={v.variables} />}>
-        {v.system_prompt && <p className="mb-2 text-xs text-ink-2">System: {v.system_prompt}</p>}
-        <div className="max-h-80 overflow-auto rounded-md bg-surface-2/60 p-3">
-          <TemplateView template={v.template} />
-        </div>
+      <Card title="Run mode">
+        <p className="text-sm">
+          {batch ? (
+            <>
+              <strong>Batch</strong> · {v.params.batch_size} inputs packed per request; the model returns a JSON array of answers.
+            </>
+          ) : (
+            <>
+              <strong>Real-time</strong> · one streaming request per input, in parallel.
+            </>
+          )}
+        </p>
       </Card>
 
-      <div className="grid gap-6 lg:grid-cols-2">
-        <Card title="Inputs & expected outputs">
-          <ul className="space-y-3 text-sm">
-            {v.datasets.map((d) => (
-              <li key={d.position} className="rounded-md border border-line p-2.5">
-                <div className="flex items-center gap-2">
-                  <span className="w-16 text-xs text-muted">Input</span>
-                  <FormatBadge format={d.format} />
-                  <DatasetLink id={d.dataset_id} available={d.available} filename={d.filename} />
-                  {d.row_count != null && <span className="tabular text-xs text-muted">{d.row_count.toLocaleString()} rows</span>}
-                </div>
-                <div className="mt-1 flex items-center gap-2">
-                  <span className="w-16 text-xs text-muted">Expected</span>
+      <Card title="Inputs" actions={<span className="text-xs text-muted">what is fed into the prompt</span>}>
+        <ul className="space-y-3 text-sm">
+          {v.datasets.map((d) => (
+            <li key={d.position}>
+              <div className="flex items-center gap-2">
+                <FormatBadge format={d.format} />
+                <DatasetLink id={d.dataset_id} available={d.available} filename={d.filename} />
+                {d.row_count != null && <span className="tabular text-xs text-muted">{d.row_count.toLocaleString()} rows</span>}
+              </div>
+              <div className="ml-1 mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-ink-2">
+                {Object.entries(d.mapping).map(([k, c]) => (
+                  <span key={k}>
+                    <span className="font-mono">{c}</span> → <code className="text-accent">{`{{${k}}}`}</code>
+                  </span>
+                ))}
+              </div>
+            </li>
+          ))}
+        </ul>
+      </Card>
+
+      <Card title="Expected outputs" actions={<span className="text-xs text-muted">how replies are processed and compared</span>}>
+        <div className="space-y-4 text-sm">
+          <div>
+            <div className="mb-1 text-xs text-muted">Expected values</div>
+            <ul className="space-y-1.5">
+              {v.datasets.map((d) => (
+                <li key={d.position} className="flex flex-wrap items-center gap-x-2">
+                  <span className="font-mono text-xs text-ink-2">{d.filename}</span>
+                  <span className="text-muted">←</span>
                   {d.expected_dataset_id ? (
                     <>
                       <FormatBadge format={d.expected_format} />
                       <DatasetLink id={d.expected_dataset_id} available={d.expected_available} filename={d.expected_filename ?? "?"} />
+                      <span className="text-xs text-ink-2">
+                        matched {d.input_key ? `on ${d.input_key} = ${d.expected_key}` : "by row order"} · {d.expected_column ? `column ${d.expected_column}` : "whole row as JSON"}
+                      </span>
                     </>
                   ) : d.expected_column ? (
                     <span className="text-xs">
@@ -57,49 +92,38 @@ export function ProfileConfigView({ v }: { v: ProfileVersion }) {
                   ) : (
                     <span className="text-xs text-muted">none</span>
                   )}
-                </div>
-                {d.expected_dataset_id && (
-                  <div className="ml-[4.5rem] mt-0.5 text-xs text-ink-2">
-                    matched {d.input_key ? `on ${d.input_key} = ${d.expected_key}` : "by row order"} · expected value: {d.expected_column ? `column ${d.expected_column}` : "whole row as JSON"}
-                  </div>
-                )}
-              </li>
-            ))}
-          </ul>
-        </Card>
-
-        <Card title="Comparison">
-          <dl className="space-y-2 text-sm">
-            <div>
-              <dt className="text-xs text-muted">Scoring</dt>
-              <dd>{method}</dd>
-            </div>
-            {Array.isArray(cfg.fields) && (
-              <div>
-                <dt className="text-xs text-muted">Fields</dt>
-                <dd className="font-mono text-xs">{(cfg.fields as string[]).join(", ")}</dd>
-              </div>
-            )}
+                </li>
+              ))}
+            </ul>
+          </div>
+          <div>
+            <div className="mb-1 text-xs text-muted">Processing the reply</div>
+            <div>{describeExtract(cfg.extract as Record<string, unknown> | undefined)}</div>
+          </div>
+          <div>
+            <div className="mb-1 text-xs text-muted">Comparison</div>
+            <div>{method}</div>
+            {Array.isArray(cfg.fields) && <div className="mt-0.5 font-mono text-xs">fields: {(cfg.fields as string[]).join(", ")}</div>}
+            {typeof cfg.rubric === "string" && <div className="mt-0.5 text-xs">rubric: {cfg.rubric}</div>}
+            {cfg.pass_threshold != null && <div className="mt-0.5 text-xs text-ink-2">pass threshold {String(cfg.pass_threshold)}</div>}
             {cfg.schema != null && (
-              <details>
+              <details className="mt-1">
                 <summary className="cursor-pointer text-xs text-muted">Output schema</summary>
                 <pre className="mt-1 max-h-48 overflow-auto rounded bg-surface-2/60 p-2 font-mono text-xs">{JSON.stringify(cfg.schema, null, 2)}</pre>
               </details>
             )}
-            {typeof cfg.rubric === "string" && (
-              <div>
-                <dt className="text-xs text-muted">Rubric</dt>
-                <dd className="text-xs">{cfg.rubric}</dd>
-              </div>
-            )}
-          </dl>
-        </Card>
-      </div>
+          </div>
+        </div>
+      </Card>
 
-      <Card
-        title={`Execution · ${v.params.mode === "batch" ? `batch, ${v.params.batch_size} inputs per request` : "real-time"} · ${v.models.length} model${v.models.length === 1 ? "" : "s"}`}
-        actions={<span className="text-xs text-muted">max_tokens {v.params.max_tokens} · temperature {v.params.temperature} · concurrency {v.params.concurrency}</span>}
-      >
+      <Card title={`Prompt · ${v.prompt_name}`} actions={<VariableChips variables={v.variables} />}>
+        {v.system_prompt && <p className="mb-2 text-xs text-ink-2">System: {v.system_prompt}</p>}
+        <div className="max-h-80 overflow-auto rounded-md bg-surface-2/60 p-3">
+          <TemplateView template={v.template} />
+        </div>
+      </Card>
+
+      <Card title={`Models (${v.models.length})`} actions={<span className="text-xs text-muted">max_tokens {v.params.max_tokens} · temperature {v.params.temperature} · concurrency {v.params.concurrency}</span>}>
         <div className="flex flex-wrap gap-1.5">
           {v.models.map((m) => (
             <span key={m.id} className={`rounded-md border border-line px-2 py-1 text-xs ${m.active ? "" : "text-muted line-through"}`} title={m.model_id}>

@@ -25,6 +25,11 @@ export type ScoringState = {
   fields: string; // json_fields: comma-separated paths; empty = every expected key
   fields_schema: string; // json_fields: optional schema checked first
   fields_threshold: string;
+  // Output processing, applied to every reply before comparison.
+  extract_type: "none" | "json_field" | "regex";
+  extract_path: string;
+  extract_pattern: string;
+  extract_group: string;
 };
 
 export const DEFAULT_SCORING: ScoringState = {
@@ -39,15 +44,43 @@ export const DEFAULT_SCORING: ScoringState = {
   fields: "",
   fields_schema: "",
   fields_threshold: "1",
+  extract_type: "none",
+  extract_path: "",
+  extract_pattern: "",
+  extract_group: "",
 };
+
+function buildExtract(s: ScoringState): Record<string, unknown> | undefined {
+  if (s.extract_type === "json_field") {
+    if (!s.extract_path.trim()) throw new Error("Output processing: enter the JSON field to take");
+    return { type: "json_field", path: s.extract_path.trim() };
+  }
+  if (s.extract_type === "regex") {
+    if (!s.extract_pattern) throw new Error("Output processing: enter a regex");
+    try {
+      new RegExp(s.extract_pattern);
+    } catch {
+      throw new Error("Output processing: the regex is not valid");
+    }
+    const group = s.extract_group.trim();
+    return { type: "regex", pattern: s.extract_pattern, ...(group ? { group: Number(group) } : {}) };
+  }
+  return undefined;
+}
 
 const clamp01 = (v: string, fallback: number) => {
   const n = Number(v);
   return Number.isFinite(n) && v !== "" ? Math.min(1, Math.max(0, n)) : fallback;
 };
 
-/** Build the backend scoring_config; throws with a user-facing message on bad input. */
+/** Build the backend scoring_config (including output processing); throws a user-facing message on bad input. */
 export function buildScoringConfig(method: ScoringMethod, s: ScoringState): Record<string, unknown> {
+  const cfg = buildMethodConfig(method, s);
+  const extract = buildExtract(s);
+  return extract ? { ...cfg, extract } : cfg;
+}
+
+function buildMethodConfig(method: ScoringMethod, s: ScoringState): Record<string, unknown> {
   switch (method) {
     case "exact":
     case "contains":
@@ -166,6 +199,13 @@ export function ScoringConfig({ method, state, onChange }: { method: ScoringMeth
 /** Inverse of buildScoringConfig: prefill the form from a stored config (clone & edit). */
 export function scoringStateFrom(cfg: Record<string, unknown>, method?: ScoringMethod): ScoringState {
   const s = { ...DEFAULT_SCORING };
+  const ex = (cfg.extract ?? {}) as Record<string, unknown>;
+  if (ex.type === "json_field" || ex.type === "regex") {
+    s.extract_type = ex.type;
+    s.extract_path = typeof ex.path === "string" ? ex.path : "";
+    s.extract_pattern = typeof ex.pattern === "string" ? ex.pattern : "";
+    s.extract_group = ex.group != null ? String(ex.group) : "";
+  }
   if (method === "json_fields") {
     if (Array.isArray(cfg.fields)) s.fields = cfg.fields.join(", ");
     if (cfg.schema != null) s.fields_schema = JSON.stringify(cfg.schema, null, 2);
@@ -181,4 +221,47 @@ export function scoringStateFrom(cfg: Record<string, unknown>, method?: ScoringM
   if (typeof cfg.rubric === "string") s.rubric = cfg.rubric;
   if (cfg.pass_threshold != null) s.pass_threshold = String(cfg.pass_threshold);
   return s;
+}
+
+
+/** How each raw model reply is processed before it's compared with the expected output. */
+export function OutputProcessing({ state, onChange }: { state: ScoringState; onChange: (s: ScoringState) => void }) {
+  const set = <K extends keyof ScoringState>(k: K, v: ScoringState[K]) => onChange({ ...state, [k]: v });
+  const options: [ScoringState["extract_type"], string, string][] = [
+    ["none", "Use the reply as is", "Trimmed of surrounding whitespace."],
+    ["json_field", "Take a field from JSON", "Parse JSON in the reply (code fences and surrounding prose are fine) and take one field."],
+    ["regex", "Extract with a regex", "Take the first match, e.g. the text after \"Final answer:\"."],
+  ];
+  return (
+    <div className="space-y-3">
+      <div className="grid gap-2 sm:grid-cols-3">
+        {options.map(([value, label, desc]) => (
+          <button
+            key={value}
+            type="button"
+            onClick={() => set("extract_type", value)}
+            className={`rounded-md border p-2.5 text-left text-sm ${state.extract_type === value ? "border-accent bg-accent/5" : "border-line hover:bg-surface-2"}`}
+          >
+            <span className="block font-medium">{label}</span>
+            <span className="mt-0.5 block text-xs text-ink-2">{desc}</span>
+          </button>
+        ))}
+      </div>
+      {state.extract_type === "json_field" && (
+        <Field label="Field" hint="Dotted path for nested fields, e.g. answer.city">
+          <input className={`${inputClass} font-mono`} value={state.extract_path} onChange={(e) => set("extract_path", e.target.value)} placeholder="answer" />
+        </Field>
+      )}
+      {state.extract_type === "regex" && (
+        <div className="grid grid-cols-[1fr_8rem] gap-3">
+          <Field label="Regex" hint="Case-insensitive; spans lines">
+            <input className={`${inputClass} font-mono`} value={state.extract_pattern} onChange={(e) => set("extract_pattern", e.target.value)} placeholder="final answer:\s*(.+)" />
+          </Field>
+          <Field label="Capture group" hint="Default: 1 if any, else whole match">
+            <input type="number" min={0} className={inputClass} value={state.extract_group} onChange={(e) => set("extract_group", e.target.value)} />
+          </Field>
+        </div>
+      )}
+    </div>
+  );
 }
