@@ -51,7 +51,7 @@ export function Header() {
 
   return (
     <header className="border-b border-line bg-surface">
-      <nav className="mx-auto flex max-w-7xl items-center gap-5 px-4 py-3">
+      <nav className="mx-auto flex max-w-[120rem] items-center gap-5 px-4 py-3 sm:px-6 lg:px-10">
         <Link href="/" className="flex shrink-0 items-center gap-2" aria-label="BenchMonster home">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src="/brand/monster.png" alt="" className="h-9 w-auto" />
