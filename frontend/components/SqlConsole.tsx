@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { api, type QueryResult, type SchemaTable } from "@/lib/api";
-import { Button, Card, ErrorNote } from "./ui";
+import { api, type QueryResult, type SavedQuery, type SchemaTable } from "@/lib/api";
+import { Button, Card, ErrorNote, inputClass } from "./ui";
 
 export function presetQueries(runId: number) {
   return [
@@ -72,8 +72,42 @@ export function SqlConsole({ runId, sql, onSqlChange }: { runId: number; sql: st
   const [busy, setBusy] = useState(false);
   const [openTable, setOpenTable] = useState<string | null>("results");
 
+  // Saved queries (shared across the org). `active` is the one loaded in the editor.
+  const [saved, setSaved] = useState<SavedQuery[]>([]);
+  const [active, setActive] = useState<SavedQuery | null>(null);
+  const [saveName, setSaveName] = useState<string | null>(null); // non-null = save form open
+  const refreshSaved = () => api.savedQueries().then(setSaved);
+
+  const persist = async (asNew: boolean) => {
+    const name = (saveName ?? "").trim();
+    if (!name) return;
+    setError(null);
+    try {
+      const q = active && !asNew ? await api.updateQuery(active.id, name, sql) : await api.saveQuery(name, sql);
+      setActive(q);
+      setSaveName(null);
+      await refreshSaved();
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+
+  const load = (q: SavedQuery) => {
+    setActive(q);
+    onSqlChange(q.sql);
+    run(q.sql);
+  };
+
+  const remove = async (q: SavedQuery) => {
+    if (!window.confirm(`Delete saved query "${q.name}"?`)) return;
+    await api.deleteQuery(q.id);
+    if (active?.id === q.id) setActive(null);
+    refreshSaved();
+  };
+
   useEffect(() => {
     api.schema().then(setSchema);
+    api.savedQueries().then(setSaved);
     // Show the default query's result on first load.
     api.query(sql).then(setResult, () => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -97,7 +131,7 @@ export function SqlConsole({ runId, sql, onSqlChange }: { runId: number; sql: st
   return (
     <Card
       title="SQL console"
-      actions={<span className="text-xs text-muted">read-only · analytics views · 5s timeout</span>}
+      actions={<span className="text-xs text-muted">read-only · your org&apos;s data · 5s timeout</span>}
       className="flex min-w-0 flex-col"
     >
       <div className="flex flex-wrap gap-1.5">
@@ -106,6 +140,7 @@ export function SqlConsole({ runId, sql, onSqlChange }: { runId: number; sql: st
             key={p.label}
             type="button"
             onClick={() => {
+              setActive(null);
               onSqlChange(p.sql);
               run(p.sql);
             }}
@@ -117,7 +152,30 @@ export function SqlConsole({ runId, sql, onSqlChange }: { runId: number; sql: st
       </div>
 
       <div className="mt-3 grid gap-3 md:grid-cols-[180px_1fr]">
-        <aside className="max-h-72 overflow-y-auto text-xs">
+        <aside className="max-h-80 overflow-y-auto text-xs">
+          <div className="mb-1 font-medium text-muted">Saved queries</div>
+          {saved.length === 0 ? (
+            <p className="mb-3 text-muted">None yet. Write a query and click Save.</p>
+          ) : (
+            <ul className="mb-3 space-y-0.5">
+              {saved.map((q) => (
+                <li key={q.id} className="group flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => load(q)}
+                    title={`${q.sql}${q.created_by ? `\n\nby ${q.created_by}` : ""}`}
+                    className={`flex-1 truncate rounded px-1 py-0.5 text-left hover:bg-surface-2 ${active?.id === q.id ? "bg-accent/10 font-medium text-accent" : ""}`}
+                  >
+                    ★ {q.name}
+                  </button>
+                  <button type="button" onClick={() => remove(q)} className="invisible px-1 text-muted hover:text-critical group-hover:visible" aria-label={`Delete ${q.name}`}>
+                    ×
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+          <div className="mb-1 font-medium text-muted">Views</div>
           {schema.map((t) => (
             <div key={t.name}>
               <button type="button" className="w-full py-0.5 text-left font-mono font-medium hover:text-accent" onClick={() => setOpenTable(openTable === t.name ? null : t.name)}>
@@ -158,6 +216,40 @@ export function SqlConsole({ runId, sql, onSqlChange }: { runId: number; sql: st
               {busy ? "Running…" : "Run"}
             </Button>
             <span className="text-xs text-muted">⌘/Ctrl + Enter</span>
+            {saveName === null ? (
+              <Button variant="secondary" onClick={() => setSaveName(active?.name ?? "")} disabled={!sql.trim()}>
+                {active ? "Save…" : "Save as…"}
+              </Button>
+            ) : (
+              <form
+                className="flex items-center gap-1.5"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  persist(false);
+                }}
+              >
+                <input
+                  autoFocus
+                  value={saveName}
+                  onChange={(e) => setSaveName(e.target.value)}
+                  onKeyDown={(e) => e.key === "Escape" && setSaveName(null)}
+                  placeholder="Query name"
+                  className={`${inputClass} w-44 py-1`}
+                  aria-label="Saved query name"
+                />
+                <Button type="submit" disabled={!saveName.trim()}>
+                  {active ? "Update" : "Save"}
+                </Button>
+                {active && (
+                  <Button type="button" variant="secondary" onClick={() => persist(true)} disabled={!saveName.trim() || saveName.trim() === active.name}>
+                    Save as new
+                  </Button>
+                )}
+                <Button type="button" variant="ghost" onClick={() => setSaveName(null)}>
+                  Cancel
+                </Button>
+              </form>
+            )}
             {result && (
               <span className="ml-auto text-xs text-ink-2">
                 {result.row_count} rows{result.truncated && " (truncated)"} · {result.elapsed_ms}ms
