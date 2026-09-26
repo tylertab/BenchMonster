@@ -7,6 +7,7 @@ until it answers. Messages are stored per scope.
 """
 
 import json
+import re
 from dataclasses import dataclass
 from decimal import Decimal
 
@@ -18,7 +19,7 @@ from . import connections as conns
 from . import db, linked, memory, providers, sqlconsole
 from .config import settings
 
-MAX_TOOL_ROUNDS = 3  # write_query doesn't return data, so there's little to iterate on
+MAX_TOOL_ROUNDS = 5  # a couple of look_ups, write_query, then the answer
 HISTORY_TURNS = 12
 
 
@@ -60,6 +61,29 @@ TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "look_up",
+            "description": (
+                "Inspect the data's structure before writing a query: list runs or profiles, a table's columns, "
+                "a column's most common values, or a few sample rows. For learning names, ids and values only; "
+                "never use it to compute the answer, which you give with write_query."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "what": {"type": "string", "enum": ["runs", "profiles", "columns", "distinct_values", "sample_rows"]},
+                    "table": {"type": "string", "description": "Table/view name (columns, distinct_values, sample_rows)"},
+                    "column": {"type": "string", "description": "Column name (distinct_values)"},
+                    "run_id": {"type": "integer", "description": "Optional: only this run (BenchMonster tables with run_id)"},
+                    "profile_id": {"type": "integer", "description": "Optional: only this profile"},
+                    "source": {"type": "string", "description": "'benchmonster' (default) or a connected database's name"},
+                },
+                "required": ["what"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "write_query",
             "description": (
                 "Give the user a SQL query to run. It is NOT executed: it's shown to the user with buttons to "
@@ -97,7 +121,7 @@ TOOLS = [
     },
 ]
 
-SYSTEM = """You are BMQuery, BenchMonster's benchmark analyst. You write SQL for the user to run against their LLM benchmark data. You do not run queries yourself: the only data you see is the Scope summary and the notes below. Never state results or numbers beyond those; write the query that answers the question and say what it will return.
+SYSTEM = """You are BMQuery, BenchMonster's benchmark analyst. You write SQL for the user to run against their LLM benchmark data. You do not run the analysis yourself: you can look up structure (runs, profiles, columns, common values, sample rows) with look_up, and you write the query that answers the question with write_query for the user to run. Never state results or numbers you haven't seen; say what the query will return.
 
 Concepts: a benchmark profile is a versioned configuration (prompt + record source + scoring + models). Each run executes one profile version (profile_id, profile_version) over every input with every model; results has one row per (run, input, model).
 
@@ -143,9 +167,10 @@ Postgres notes: FILTER goes right after the aggregate: avg(x) filter (where ...)
 {memories}
 
 ## How to work
-- Plan the query from the schema and the notes above, then call write_query once with a query that fully answers the question. Only use tables and columns listed above. Don't write exploratory queries.
+- If you're unsure of names, ids or values (which runs, what a column contains, what a row looks like), call look_up first; a couple of lookups at most. Then call write_query once with a query that fully answers the question. Only use tables and columns that exist.
 - Filter to the current scope (run_id / profile_id) unless the user asks more broadly.
-- BenchMonster data and each connected database are separate databases: one query can't join across them. If a question needs both, write one query per source and say how to combine them.
+- HARD RULE: every query runs against exactly ONE source. BenchMonster data (results, runs, model_summary, ...) and each connected database are separate databases, so one query must never reference tables from two of them: no joins, subqueries or CTEs across sources, and no made-up views that would combine them. For example, results and demo_warehouse.personality_survey can never appear in the same query.
+- If a question needs data from two sources, write one query per source (each with its own source) and explain how to line them up. For runs that read a database table, results.variables holds the row's key, e.g. variables->>'id', which matches the table's key column (e.g. personality_survey.id).
 - If the user reports an error, find the cause, fix it and call write_query again with the corrected query.
 - After writing the query, reply briefly: what it returns (its columns) and anything to change (e.g. which run ids to put in). Don't paste the SQL into your reply; it's shown from write_query. Keep it short; you may be read aloud.
 - If the user shares results or facts worth keeping, you may call save_finding.
@@ -339,10 +364,146 @@ async def _connections_context(org_id: int) -> str:
     return "\n".join(await asyncio.gather(*(describe(c) for c in rows)))
 
 
+LOOKUP_ROWS = 30
+LOOKUP_SAMPLE = 5
+LOOKUP_TEXT = 200  # characters kept per cell in lookups
+
+
+def _ident(name: str) -> str:
+    return '"' + name.replace('"', '""') + '"'
+
+
+async def _pg_connections_by_name(org_id: int, source: str | None):
+    """(None, None) for BenchMonster data, else (connection row, its name); raises QueryError if unknown."""
+    if not source or source.strip().lower() in ("benchmonster", "benchmonster data", "default"):
+        return None, None
+    match = next((c for c in await _pg_connections(org_id) if c["name"].lower() == source.strip().lower()), None)
+    if not match:
+        raise sqlconsole.QueryError(f"no connected database named {source!r}")
+    return match, match["name"]
+
+
+async def _look_up(scope: Scope, args: dict) -> tuple[str, dict]:
+    """Run one fixed-shape, read-only lookup. Table and column names are checked against the schema."""
+    what = args.get("what")
+    conn_row, source_name = await _pg_connections_by_name(scope.org_id, args.get("source"))
+    if conn_row:
+        _, cfg, sec = await linked.load_connection(scope.org_id, conn_row["id"])
+        tables = await conns.pg_schema(cfg, sec)
+    else:
+        tables = await sqlconsole.schema(scope.org_id)
+    by_name = {t["name"]: [c["name"] for c in t["columns"]] for t in tables}
+
+    def filters(cols: list[str]) -> tuple[str, list]:
+        conds, params = [], []
+        for key in ("run_id", "profile_id"):
+            if args.get(key) is not None and key in cols:
+                params.append(int(args[key]))
+                conds.append(f"{key} = ${len(params)}")
+        return (f"where {' and '.join(conds)}" if conds else ""), params
+
+    params: list = []
+    if what in ("runs", "profiles"):
+        if conn_row:
+            raise sqlconsole.QueryError("runs and profiles are BenchMonster data; drop the source")
+        if what == "runs":
+            where, params = filters(by_name.get("runs", []))
+            sql = f"""select run_id, run_name, profile, profile_id, profile_version, mode, models, status, total_inputs, created_at
+                      from runs {where} order by run_id desc limit {LOOKUP_ROWS}"""
+        else:
+            sql = f"select profile_id, profile, current_version, runs, updated_at from profiles order by updated_at desc limit {LOOKUP_ROWS}"
+    else:
+        table = (args.get("table") or "").strip()
+        if table not in by_name:
+            raise sqlconsole.QueryError(f"no table {table!r}; tables: {', '.join(sorted(by_name))}")
+        if what == "columns":
+            cols = next(t["columns"] for t in tables if t["name"] == table)
+            text = json.dumps({"table": table, "columns": [f"{c['name']} {c['type']}" for c in cols]})
+            return text, {"tool": "run_sql", "lookup": True, "sql": f"-- columns of {table}", "source": source_name,
+                          "columns": ["column", "type"], "rows": [[c["name"], c["type"]] for c in cols], "truncated": False}
+        qualified = ".".join(_ident(p) for p in table.split("."))
+        where, params = filters(by_name[table])
+        if what == "distinct_values":
+            column = (args.get("column") or "").strip()
+            if column not in by_name[table]:
+                raise sqlconsole.QueryError(f"{table} has no column {column!r}; columns: {', '.join(by_name[table])}")
+            sql = f"""select left({_ident(column)}::text, {LOOKUP_TEXT}) as value, count(*) as n from {qualified} {where}
+                      group by 1 order by n desc limit {LOOKUP_ROWS}"""
+        elif what == "sample_rows":
+            sql = f"select * from {qualified} {where} limit {LOOKUP_SAMPLE}"
+        else:
+            raise sqlconsole.QueryError(f"unknown lookup {what!r}")
+    # Lookups are fixed templates with checked identifiers; bind the ids as literals for the console runner.
+    for i, p in enumerate(params, start=1):
+        sql = sql.replace(f"${i}", str(int(p)))
+    if conn_row:
+        try:
+            res = await conns.pg_query(cfg, sec, sql, LOOKUP_ROWS)
+        except HTTPException as e:
+            raise sqlconsole.QueryError(e.detail)
+    else:
+        res = await sqlconsole.run(scope.org_id, sql, max_rows=LOOKUP_ROWS)
+    cols = [c["name"] for c in res["columns"]]
+    rows = [[(v[:LOOKUP_TEXT] + "…") if isinstance(v, str) and len(v) > LOOKUP_TEXT else _fmt(v) for v in r] for r in res["rows"]]
+    text = json.dumps({"columns": cols, "rows": rows}, default=str)
+    return text, {"tool": "run_sql", "lookup": True, "sql": " ".join(sql.split()), "source": source_name,
+                  "columns": cols, "rows": rows, "truncated": res["truncated"]}
+
+
+_IDENT = re.compile(r'(?<![\w."])("?[A-Za-z_][\w]*"?(?:\s*\.\s*"?[A-Za-z_][\w]*"?)?)')
+
+
+def _referenced(sql: str) -> set[str]:
+    """Lower-cased identifiers and schema.table names in the SQL (string literals removed)."""
+    text = re.sub(r"'(?:[^']|'')*'", "''", sql)
+    return {re.sub(r'[\s"]', "", m).lower() for m in _IDENT.findall(text)}
+
+
+async def _cross_source_problem(org_id: int, sql: str, source: str | None) -> str | None:
+    """A reason the query uses tables that only exist in another source (a separate database), or None."""
+    try:
+        conn_row, source_name = await _pg_connections_by_name(org_id, source)
+    except sqlconsole.QueryError as e:
+        return str(e)
+    names = _referenced(sql)
+    bm_tables = {t["name"].lower() for t in await sqlconsole.schema(org_id)}
+
+    async def tables_of(c) -> set[str]:
+        try:
+            _, cfg, sec = await linked.load_connection(org_id, c["id"])
+            return {t["name"].lower() for t in await asyncio.wait_for(conns.pg_schema(cfg, sec), timeout=10)}
+        except Exception:
+            return set()
+
+    others = [c for c in await _pg_connections(org_id) if not (conn_row and c["id"] == conn_row["id"])]
+    own = await tables_of(conn_row) if conn_row else bm_tables
+    # A name only counts if the chosen source doesn't have it (several connections can share tables).
+    for c in others:
+        hits = sorted(n for n in (await tables_of(c)) & names if n not in own)
+        if hits:
+            return (f"This query is for {source_name or 'BenchMonster data'} but references {', '.join(hits)} from "
+                    f"\"{c['name']}\", a separate database; one query can't use both.")
+    if conn_row:
+        bm_hits = sorted(n for n in names & bm_tables if n not in own)
+        if bm_hits:
+            return (f"This query is for \"{source_name}\" but references BenchMonster's {', '.join(bm_hits)}, "
+                    "which live in a separate database; one query can't use both.")
+    return None
+
+
 async def _run_tool(scope: Scope, label: str, name: str, args: dict) -> tuple[str, dict]:
     """Returns (text for the model, record for the UI)."""
+    if name == "look_up":
+        try:
+            return await _look_up(scope, args)
+        except sqlconsole.QueryError as e:
+            return f"ERROR: {e}", {"tool": "run_sql", "lookup": True, "sql": f"-- look_up {args.get('what')}", "error": str(e)}
     if name == "write_query":
         sql = (args.get("sql") or "").strip()
+        problem = await _cross_source_problem(scope.org_id, sql, args.get("source"))
+        if problem:
+            return f"ERROR: {problem} Rewrite it as separate queries, one per source.", {
+                "tool": "query", "title": args.get("title"), "sql": sql, "source": args.get("source"), "error": problem}
         source = (args.get("source") or "").strip()
         if source.lower() in ("", "benchmonster", "benchmonster data", "default"):
             source_name = None
@@ -370,14 +531,40 @@ async def history(scope: Scope) -> list[dict]:
     return [dict(r) for r in rows]
 
 
-def _with_queries(content: str | None, tool_calls: list | None) -> str:
-    """An earlier reply plus the queries it wrote, so the analyst can fix one when the user reports an error."""
-    queries = [c for c in tool_calls or [] if c.get("tool") in ("query", "run_sql") and c.get("sql")]
-    parts = [content or ""] + [
-        f"[query you wrote{': ' + c['title'] if c.get('title') else ''}{' (source: ' + c['source'] + ')' if c.get('source') else ''}]\n{c['sql']}"
-        for c in queries
+def _replay(role: str, content: str | None, tool_calls: list | None, n: int) -> list[dict]:
+    """A stored message as chat messages. An earlier reply's queries are replayed as real write_query
+    calls (not as text the model might imitate), so it can fix one when the user reports an error."""
+    queries = [c for c in tool_calls or [] if c.get("tool") in ("query", "run_sql") and c.get("sql") and not c.get("lookup")]
+    if role != "assistant" or not queries:
+        return [{"role": role, "content": content or ""}]
+    calls = [
+        {"id": f"past_{n}_{i}", "type": "function", "function": {"name": "write_query", "arguments": json.dumps(
+            {"title": c.get("title") or "query", "sql": c["sql"], "source": c.get("source") or "benchmonster"})}}
+        for i, c in enumerate(queries)
     ]
-    return "\n\n".join(p for p in parts if p)
+    return [
+        {"role": "assistant", "content": "", "tool_calls": calls},
+        *({"role": "tool", "tool_call_id": c["id"], "content": "shown to the user (not run)"} for c in calls),
+        {"role": "assistant", "content": content or ""},
+    ]
+
+
+_SQL_BLOCK = re.compile(r"(?s)```sql\s*\n(.*?)```|<earlier_write_query(?=[^>]*source=\"([^\"]*)\")?[^>]*>\s*(.*?)\s*</earlier_write_query>")
+
+
+async def _queries_in_text(scope: Scope, text: str) -> tuple[str, list[dict]]:
+    """Pull SQL the model wrote into its reply (instead of calling write_query) out into query cards."""
+    records = []
+    for m in _SQL_BLOCK.finditer(text):
+        sql = (m.group(1) or m.group(3) or "").strip()
+        if not re.match(r"(?is)^\s*(select|with)\b", sql):
+            continue
+        source = m.group(2) if m.group(2) and m.group(2).lower() != "benchmonster" else None
+        _, rec = await _run_tool(scope, "", "write_query", {"title": "Query", "sql": sql, "source": source})
+        records.append(rec)
+    if records:
+        text = _SQL_BLOCK.sub(lambda m: "" if re.match(r"(?is)^\s*(select|with)\b", (m.group(1) or m.group(3) or "")) else m.group(0), text)
+    return re.sub(r"\n{3,}", "\n\n", text).strip(), records
 
 
 async def chat(scope: Scope, user_message: str) -> dict:
@@ -392,7 +579,8 @@ async def chat(scope: Scope, user_message: str) -> dict:
         *args, HISTORY_TURNS * 2,
     )
     messages = [{"role": "system", "content": system}]
-    messages += [{"role": r["role"], "content": _with_queries(r["content"], r["tool_calls"])} for r in past]
+    for n, r in enumerate(past):
+        messages += _replay(r["role"], r["content"], r["tool_calls"], n)
     messages.append({"role": "user", "content": user_message})
 
     ep = providers.vultr_endpoint(settings.assistant_model)
@@ -423,6 +611,11 @@ async def chat(scope: Scope, user_message: str) -> dict:
             text, record = await _run_tool(scope, label, call["function"]["name"], call_args)
             tool_records.append(record)
             messages.append({"role": "tool", "tool_call_id": call["id"], "content": text})
+    # SQL written into the reply text (instead of write_query) becomes query cards.
+    if reply:
+        reply, extra = await _queries_in_text(scope, reply)
+        tool_records += extra
+    reply = reply or None
     # Keep a substantial answer written next to a tool call (e.g. before save_finding) if the
     # final message is only a short sign-off.
     longest = max(drafts, key=len, default="")
