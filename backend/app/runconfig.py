@@ -89,6 +89,10 @@ class RunConfig(BaseModel):
     mode: Literal["realtime", "batch"] = "realtime"
     batch_size: int = Field(10, ge=2, le=50)
 
+    def all_variables(self) -> list[str]:
+        """Variables of the template, then any only in the system prompt."""
+        return list(dict.fromkeys([*templates.variables(self.template), *templates.variables(self.system_prompt or "")]))
+
     def bindings_json(self) -> dict:
         return {v: b.model_dump(exclude_none=True) for v, b in self.bindings.items()}
 
@@ -104,6 +108,7 @@ class Prepared(BaseModel):
     #  expected_filename, input_key, expected_key, selection, source, fields)
     datasets: list[tuple]
     inputs: list[tuple]  # (position, row_idx, variables, prompt, expected)
+    system_message: str | None = None  # the system prompt with its variables filled in
     streamed: bool = False  # the record source is a connection's table, read during the run
 
 
@@ -165,8 +170,16 @@ async def prepare(org_id: int, cfg: RunConfig, *, render: bool = True) -> Prepar
     if found != len(set(cfg.model_ids)):
         raise HTTPException(400, "unknown or inactive model id")
 
-    bindings = {v: b for v, b in cfg.bindings.items() if v in variables}
+    system_vars = templates.variables(cfg.system_prompt or "")
+    per_record = [v for v in system_vars if v not in cfg.bindings]
+    if per_record:
+        names = ", ".join(f"{{{{{v}}}}}" for v in per_record)
+        raise HTTPException(400, f"{names} is in the system prompt, which is the same for every record: make it a Value or a Dataset")
+    bindings = {v: b for v, b in cfg.bindings.items() if v in variables or v in system_vars}
     constants, labels = await _resolve_bindings(org_id, bindings)
+    system_message = (cfg.system_prompt or "").strip() or None
+    if system_message and system_vars:
+        system_message = templates.render(system_message, constants)
     record_vars = [v for v in variables if v not in bindings]
     if record_vars and not cfg.datasets:
         names = ", ".join(f"{{{{{v}}}}}" for v in record_vars)
@@ -178,8 +191,9 @@ async def prepare(org_id: int, cfg: RunConfig, *, render: bool = True) -> Prepar
         if cfg.scoring_method in NEEDS_EXPECTED and not (cfg.expected_text or "").strip():
             raise HTTPException(400, f"{cfg.scoring_method} scoring needs an expected output")
         if not render:
-            return Prepared(datasets=[], inputs=[])
+            return Prepared(datasets=[], inputs=[], system_message=system_message)
         return Prepared(
+            system_message=system_message,
             datasets=[(0, None, None, "(single prompt)", {}, None, None, None, None, None, {}, None, None)],
             inputs=[(0, 0, labels, templates.render(cfg.template, constants), (cfg.expected_text or "").strip() or None)],
         )
@@ -264,7 +278,7 @@ async def prepare(org_id: int, cfg: RunConfig, *, render: bool = True) -> Prepar
     streamed = any(ref.source for ref in cfg.datasets)
     if render and not inputs and not streamed:
         raise HTTPException(400, "the selected datasets have no rows")
-    return Prepared(datasets=datasets, inputs=inputs, streamed=streamed)
+    return Prepared(datasets=datasets, inputs=inputs, streamed=streamed, system_message=system_message)
 
 
 def _fields_json(specs: list[field_lib.FieldSpec] | None) -> list | None:
@@ -372,12 +386,12 @@ async def create_run(
         run_id = await conn.fetchval(
             """insert into runs (org_id, name, prompt_name, system_prompt, template, scoring_method, scoring_config,
                    params, total_inputs, output_name, created_by, profile_id, profile_version, bindings, expected_text,
-                   stream_state)
-               values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16) returning id""",
+                   stream_state, system_message)
+               values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17) returning id""",
             org_id, (name or "").strip() or None, cfg.prompt_name, (cfg.system_prompt or "").strip() or None,
             cfg.template, cfg.scoring_method, cfg.scoring_config, cfg.params(), total,
             output_name(output, label or cfg.prompt_name), user_id, profile_id, profile_version,
-            cfg.bindings_json(), (cfg.expected_text or "").strip() or None, stream_state,
+            cfg.bindings_json(), (cfg.expected_text or "").strip() or None, stream_state, prepared.system_message,
         )
         await conn.executemany(
             """insert into run_datasets (run_id, position, dataset_id, dataset_name, filename, mapping, expected_column,

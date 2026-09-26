@@ -235,10 +235,14 @@ export function ProfileEditor({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const variables = templateVariables(template);
-  const sourceOf = (v: string): VarSource => sources[v] ?? "field";
-  const fieldVars = variables.filter((v) => sourceOf(v) === "field");
-  const wholeVars = variables.filter((v) => sourceOf(v) === "record");
+  // The system prompt may use fixed variables (Value / Dataset); per-record ones belong in the template.
+  const templateVars = templateVariables(template);
+  const systemVars = templateVariables(systemPrompt);
+  const variables = [...new Set([...templateVars, ...systemVars])];
+  const inSystem = (v: string) => systemVars.includes(v);
+  const sourceOf = (v: string): VarSource => sources[v] ?? (inSystem(v) ? "text" : "field");
+  const fieldVars = templateVars.filter((v) => sourceOf(v) === "field");
+  const wholeVars = templateVars.filter((v) => sourceOf(v) === "record");
   const recordVars = [...fieldVars, ...wholeVars];
   const perRecord = recordVars.length > 0;
   const resolved = sets.map((s) => ({ ...s, mapping: resolveMapping(fieldVars, wholeVars, s.input.columns, s.mapping) }));
@@ -317,7 +321,9 @@ export function ProfileEditor({
   const problems: string[] = [];
   if (!name.trim()) problems.push("Name the benchmark profile.");
   if (!promptName.trim()) problems.push("Name the prompt.");
-  if (variables.length === 0) problems.push("The template needs at least one {{variable}}.");
+  if (templateVars.length === 0) problems.push("The template needs at least one {{variable}}.");
+  for (const v of systemVars)
+    if (sourceOf(v) === "field" || sourceOf(v) === "record") problems.push(`{{${v}}} is in the system prompt, which is the same for every record: make it a Value or a Dataset.`);
   for (const v of variables) if (sourceOf(v) === "dataset" && !inlines[v]?.datasetId) problems.push(`Choose the dataset to inline for {{${v}}}.`);
   if (perRecord) {
     if (resolved.length === 0) problems.push(`Choose the file for ${recordVars.map((v) => `{{${v}}}`).join(", ")}.`);
@@ -463,8 +469,8 @@ export function ProfileEditor({
           <Field label="Prompt name" hint="Shown in runs and SQL (prompt_name); rename it when you change the prompt to compare versions">
             <input className={inputClass} value={promptName} onChange={(e) => setPromptName(e.target.value)} placeholder="Triage rules v1" />
           </Field>
-          <Field label="System prompt" hint="Optional">
-            <textarea rows={2} className={inputClass} value={systemPrompt} onChange={(e) => setSystemPrompt(e.target.value)} />
+          <Field label="System prompt" hint="Optional. Sent as the system message, the same for every record; it can use {{variables}} set to a Value or a Dataset">
+            <textarea rows={3} className={inputClass} value={systemPrompt} onChange={(e) => setSystemPrompt(e.target.value)} />
           </Field>
           <Field label="Template" hint="Each {{variable}} becomes an input you connect in the next section">
             <textarea rows={10} className={`${inputClass} font-mono text-xs`} value={template} onChange={(e) => setTemplate(e.target.value)} placeholder={"Catalog:\n{{catalog}}\n\nQuestion: {{question}}"} />
@@ -498,9 +504,14 @@ export function ProfileEditor({
                   <div key={v} className="rounded-md border border-line p-2.5">
                     <div className="flex flex-wrap items-center gap-2">
                       <code className="min-w-32 text-sm text-accent">{`{{${v}}}`}</code>
+                      {inSystem(v) && (
+                        <span className="rounded bg-surface-2 px-1.5 text-[11px] text-ink-2" title="Used in the system prompt">
+                          {templateVars.includes(v) ? "system + template" : "system prompt"}
+                        </span>
+                      )}
                       <span className="text-muted">←</span>
                       <select className={compactInputClass} value={src} onChange={(e) => setSources({ ...sources, [v]: e.target.value as VarSource })} aria-label={`Source for ${v}`}>
-                        {(Object.keys(SOURCE_LABEL) as VarSource[]).map((k) => (
+                        {(Object.keys(SOURCE_LABEL) as VarSource[]).filter((k) => !inSystem(v) || k === "text" || k === "dataset").map((k) => (
                           <option key={k} value={k}>
                             {SOURCE_LABEL[k]}
                           </option>
@@ -678,6 +689,13 @@ export function ProfileEditor({
             {previewValues && (
               <div>
                 <div className="mb-1 text-xs text-muted">Preview{perRecord && resolved[0] ? `: first record of ${resolved[0].input.filename}` : ""}</div>
+                {systemPrompt.trim() && (
+                  <>
+                    <div className="mb-1 text-[11px] font-medium uppercase tracking-wide text-muted">System</div>
+                    <pre className="mb-2 max-h-40 overflow-auto whitespace-pre-wrap rounded-md bg-surface-2/60 p-3 font-mono text-xs">{renderTemplate(systemPrompt.trim(), previewValues)}</pre>
+                    <div className="mb-1 text-[11px] font-medium uppercase tracking-wide text-muted">User</div>
+                  </>
+                )}
                 <pre className="max-h-56 overflow-auto whitespace-pre-wrap rounded-md bg-surface-2/60 p-3 font-mono text-xs">{renderTemplate(template, previewValues)}</pre>
               </div>
             )}

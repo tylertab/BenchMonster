@@ -58,7 +58,7 @@ async def _version(profile_id: int, version: int) -> dict:
                              "scoring_config", "model_ids", "params", "note", "created_at", "created_by_name",
                              "bindings", "expected_text")}
     out["display_bindings"] = await runconfig.with_filenames(v["bindings"])
-    return {**out, "variables": templates.variables(v["template"]),
+    return {**out, "variables": templates.variables(f'{v["template"]} {v["system_prompt"] or ""}'),
             "datasets": [dict(d) for d in datasets], "models": [dict(m) for m in models]}
 
 
@@ -79,9 +79,9 @@ def _as_config(v: dict) -> runconfig.RunConfig:
 
 def _sections(cfg: runconfig.RunConfig) -> dict:
     """Comparable view of each config section, for change detection."""
-    variables = templates.variables(cfg.template)
+    variables = cfg.all_variables()
     bindings = {k: b for k, b in cfg.bindings_json().items() if k in variables}
-    record_vars = [v for v in variables if v not in bindings]
+    record_vars = [v for v in templates.variables(cfg.template) if v not in bindings]
     return {
         "prompt": (cfg.prompt_name.strip(), (cfg.system_prompt or "").strip(), cfg.template),
         # Unmapped variables default to same-named columns, so compare resolved mappings.

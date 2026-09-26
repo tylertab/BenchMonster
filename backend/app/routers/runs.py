@@ -140,7 +140,7 @@ async def get_run(run_id: int, ctx: auth.Ctx = Depends(auth.current_ctx)):
     return {
         **dict(run),
         "bindings": await runconfig.with_filenames(run["bindings"]),
-        "variables": templates.variables(run["template"]),
+        "variables": templates.variables(f'{run["template"]} {run["system_prompt"] or ""}'),
         "datasets": await _datasets(run_id),
         "models": [dict(m) for m in models],
         "summary": [dict(s) for s in summary],

@@ -35,8 +35,9 @@ def start(run_id: int) -> None:
 def build_messages(run, prompt: str) -> list[dict]:
     """Inputs were rendered from the template when the run was created."""
     msgs = []
-    if run["system_prompt"]:
-        msgs.append({"role": "system", "content": run["system_prompt"]})
+    system = run["system_message"] or run["system_prompt"]  # rendered at creation (older runs: as written)
+    if system:
+        msgs.append({"role": "system", "content": system})
     msgs.append({"role": "user", "content": prompt})
     return msgs
 
