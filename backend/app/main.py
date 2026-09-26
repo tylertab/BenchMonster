@@ -1,3 +1,4 @@
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -5,11 +6,18 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from . import db
 from .config import settings
+from .routers import models
+
+log = logging.getLogger("uvicorn.error")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await db.connect()
+    try:
+        log.info("synced %d Vultr models", await models.sync_vultr_models())
+    except Exception:
+        log.exception("Vultr model sync failed; continuing with cached catalog")
     yield
     await db.disconnect()
 
@@ -21,6 +29,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.include_router(models.router)
 
 
 @app.get("/api/health")
