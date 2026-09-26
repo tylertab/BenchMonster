@@ -9,7 +9,12 @@ import { compactInputClass } from "./ui";
  * Which records of the record file a run uses: filter rules, one per field value,
  * and first / random N. Shows a live count from the server.
  */
-export function RecordFilter({ dataset, value, onChange }: { dataset: Dataset; value: RecordSelection; onChange: (s: RecordSelection) => void }) {
+export function RecordFilter({ dataset, value, onChange, linked }: {
+  dataset: Dataset;
+  value: RecordSelection;
+  onChange: (s: RecordSelection) => void;
+  linked?: { connectionId: number; table: string; key: string } | null; // count and preview in the database
+}) {
   const [open, setOpen] = useState(!isDefaultSelection(value));
   const [preview, setPreview] = useState<SelectionPreview | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -17,9 +22,13 @@ export function RecordFilter({ dataset, value, onChange }: { dataset: Dataset; v
   const pick = value.pick ?? "all";
   const key = JSON.stringify(cleanSelection(value));
 
+  const [lc, lt, lk] = [linked?.connectionId, linked?.table, linked?.key];
   useEffect(() => {
     const t = setTimeout(() => {
-      api.previewSelection(dataset.id, JSON.parse(key)).then(
+      (lc && lt && lk
+        ? api.previewStream(lc, { table: lt, key: lk, selection: JSON.parse(key) })
+        : api.previewSelection(dataset.id, JSON.parse(key))
+      ).then(
         (p) => {
           setPreview(p);
           setError(null);
@@ -28,7 +37,7 @@ export function RecordFilter({ dataset, value, onChange }: { dataset: Dataset; v
       );
     }, 300);
     return () => clearTimeout(t);
-  }, [dataset.id, key]);
+  }, [dataset.id, key, lc, lt, lk]);
 
   const set = (patch: Partial<RecordSelection>) => onChange({ ...value, ...patch });
   const addRule = () => set({ rules: [...rules, { field: dataset.columns[0] ?? "", op: "eq", value: "" }] });
@@ -40,7 +49,11 @@ export function RecordFilter({ dataset, value, onChange }: { dataset: Dataset; v
         <span className="text-muted">{open ? "▾" : "▸"}</span>
         <span className="font-medium">Records to use</span>
         <span className="text-ink-2">
-          {count == null ? "…" : count === dataset.row_count ? `all ${count.toLocaleString()}` : `${count.toLocaleString()} of ${dataset.row_count.toLocaleString()}`}
+          {count == null
+            ? "…"
+            : count === (preview?.total ?? dataset.row_count)
+              ? `all ${count.toLocaleString()}`
+              : `${count.toLocaleString()} of ${(preview?.total ?? dataset.row_count).toLocaleString()}`}
         </span>
         {!isDefaultSelection(value) && preview?.description && <span className="min-w-0 truncate text-xs text-muted">· {preview.description}</span>}
         {!open && isDefaultSelection(value) && <span className="ml-auto text-xs text-accent">Filter or sample</span>}

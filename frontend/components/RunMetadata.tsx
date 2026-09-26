@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { api, type Run } from "@/lib/api";
+import { describeFields } from "@/lib/fields";
 import { describeSelection } from "@/lib/selection";
 import { METHODS } from "./ScoringConfig";
 import { TemplateView } from "./TemplateView";
@@ -59,8 +60,14 @@ export function RunMetadata({ run }: { run: Run }) {
                       <span className="font-mono">{d.filename}</span>
                     )}
                     <span className="tabular text-xs text-muted">{d.rows} rows</span>
+                    {d.source && (
+                      <span className="text-xs text-ink-2">
+                        · ⇄ {d.dataset_name}, streamed in order of <code>{d.source.key}</code>
+                      </span>
+                    )}
                     {describeSelection(d.selection) && <span className="text-xs text-ink-2">· {describeSelection(d.selection)}</span>}
                   </div>
+                  {d.fields && <div className="ml-5 text-xs text-ink-2">Fields: {describeFields(d.fields)}</div>}
                   <div className="ml-5 flex flex-wrap gap-x-3 text-xs text-ink-2">
                     {Object.entries(d.mapping).map(([v, c]) => (
                       <span key={v}>

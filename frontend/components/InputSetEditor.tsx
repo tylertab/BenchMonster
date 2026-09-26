@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { api, type Dataset, type RecordSelection } from "@/lib/api";
+import { api, type Dataset, type FieldSpec, type RecordSelection } from "@/lib/api";
 import { cleanSelection } from "@/lib/selection";
 import { Button, compactInputClass, Empty, inputClass } from "./ui";
 
@@ -20,7 +20,38 @@ export type InputSet = {
   expectedKey: string;
   expectedValue: "row" | "column";
   selection: RecordSelection;
+  fields: FieldSpec[] | null; // which columns reach the prompt, parsed how (null = all, auto)
+  linked: LinkedTable | null; // a connection's table, streamed during the run (input is then a stand-in)
 };
+
+/** A Postgres table used directly as the record source. */
+export type LinkedTable = { connectionId: number; connectionName: string; table: string; key: string; types: Record<string, string>; primaryKey: string[] };
+
+/** A Dataset-shaped stand-in for a table, so the editor can treat both sources alike. */
+export function tableAsDataset(l: Omit<LinkedTable, "key">, approxRows: number): Dataset {
+  return {
+    id: -l.connectionId * 100000 - (hash(l.table) % 100000),
+    name: l.table,
+    filename: l.table,
+    format: "table",
+    columns: Object.keys(l.types),
+    row_count: approxRows,
+    created_at: "",
+    created_by: null,
+    description: null,
+    schema: null,
+    run_count: 0,
+    expected_run_count: 0,
+    source: null,
+    connection_name: l.connectionName,
+  };
+}
+
+function hash(s: string): number {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+  return h;
+}
 
 const EXPECTED_GUESSES = ["expected", "expected_output", "answer", "output", "target", "label", "gold", "reference"];
 export const guessExpected = (columns: string[]) => columns.find((c) => EXPECTED_GUESSES.includes(c.toLowerCase())) ?? "";
@@ -98,7 +129,7 @@ export function DatasetPicker({ datasets, onPick, onUploaded, onCancel, title }:
 
 /** Where the record file's expected outputs come from, and how rows are matched. */
 export function ExpectedOutputCard({ set, datasets, onChange, onUploaded }: {
-  set: InputSet;
+  set: InputSet; // a linked table only offers "field in the record" (a separate file can't be joined while streaming)
   datasets: Dataset[];
   onChange: (s: InputSet) => void;
   onUploaded: (d: Dataset) => void;
@@ -117,7 +148,7 @@ export function ExpectedOutputCard({ set, datasets, onChange, onUploaded }: {
         <span className="text-xs text-muted">For</span>
         <span className="font-mono text-xs font-medium">{set.input.filename}</span>
         <span className="ml-auto flex flex-wrap gap-1.5">
-          {(["dataset", "column", "none"] as ExpectedSource[]).map((src) => (
+          {((set.linked ? ["column", "none"] : ["dataset", "column", "none"]) as ExpectedSource[]).map((src) => (
             <button
               key={src}
               type="button"
@@ -128,7 +159,7 @@ export function ExpectedOutputCard({ set, datasets, onChange, onUploaded }: {
               }
               className={`rounded-full border px-2.5 py-0.5 text-xs ${set.expectedSource === src ? "border-accent bg-accent/10 text-accent" : "border-line text-ink-2 hover:bg-surface-2"}`}
             >
-              {src === "dataset" ? "Separate file" : src === "column" ? "Field in the input file" : "None"}
+              {src === "dataset" ? "Separate file" : src === "column" ? (set.linked ? "Column of the table" : "Field in the input file") : "None"}
             </button>
           ))}
         </span>
@@ -233,7 +264,9 @@ export function ExpectedOutputCard({ set, datasets, onChange, onUploaded }: {
 export function toRef(s: InputSet, mapping: Record<string, string>) {
   const fromDataset = s.expectedSource === "dataset" && s.expectedDataset;
   return {
-    dataset_id: s.input.id,
+    dataset_id: s.linked ? null : s.input.id,
+    source: s.linked ? { connection_id: s.linked.connectionId, table: s.linked.table, key: s.linked.key } : null,
+    fields: s.fields,
     mapping,
     expected_column:
       s.expectedSource === "column" ? s.expectedColumn || null : fromDataset && s.expectedValue === "column" ? s.expectedColumn || null : null,

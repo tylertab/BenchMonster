@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import type { ProfileVersion } from "@/lib/api";
+import { describeFields } from "@/lib/fields";
 import { describeSelection } from "@/lib/selection";
 import { FormatBadge } from "./InputSetEditor";
 import { METHODS } from "./ScoringConfig";
@@ -90,11 +91,26 @@ export function ProfileConfigView({ v }: { v: ProfileVersion }) {
               <div className="mb-1 text-xs text-muted">Record sources (one prompt per record)</div>
               <ul className="space-y-1">
                 {v.datasets.map((d) => (
-                  <li key={d.position} className="flex items-center gap-2">
-                    <FormatBadge format={d.format} />
-                    <DatasetLink id={d.dataset_id} available={d.available} filename={d.filename} />
-                    {d.row_count != null && <span className="tabular text-xs text-muted">{d.row_count.toLocaleString()} rows</span>}
-                    {describeSelection(d.selection) && <span className="text-xs text-ink-2">· using records {describeSelection(d.selection)}</span>}
+                  <li key={d.position}>
+                    <div className="flex flex-wrap items-center gap-2">
+                      {d.source ? (
+                        <>
+                          <FormatBadge format="table" />
+                          <span className="font-mono">{d.filename}</span>
+                          <span className="text-xs text-ink-2">
+                            ⇄ {d.dataset_name}, read directly in order of <code>{d.source.key}</code>
+                          </span>
+                        </>
+                      ) : (
+                        <>
+                          <FormatBadge format={d.format} />
+                          <DatasetLink id={d.dataset_id} available={d.available} filename={d.filename} />
+                          {d.row_count != null && <span className="tabular text-xs text-muted">{d.row_count.toLocaleString()} rows</span>}
+                        </>
+                      )}
+                      {describeSelection(d.selection) && <span className="text-xs text-ink-2">· using records {describeSelection(d.selection)}</span>}
+                    </div>
+                    {d.fields && <div className="mt-0.5 text-xs text-ink-2">Fields: {describeFields(d.fields)}</div>}
                   </li>
                 ))}
               </ul>

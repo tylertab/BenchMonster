@@ -184,7 +184,15 @@ async def execute(run_id: int) -> None:
         )
         params = {"max_tokens": 4096, "temperature": 0.0, "concurrency": 8, "mode": "realtime", "batch_size": 10,
                   **run["params"]}
-        await pool.execute("update runs set status = 'running', started_at = now() where id = $1", run_id)
+        await pool.execute("update runs set status = 'running', started_at = coalesce(started_at, now()) where id = $1", run_id)
+
+        if run["stream_state"] is not None:
+            from . import streaming  # streamed from a connection's table, chunk by chunk
+
+            await streaming.execute(run, models, params)
+            await pool.execute("update runs set status = 'completed', finished_at = now() where id = $1", run_id)
+            await exports.auto_export(run_id)
+            return
 
         jobs = []
         size = params["batch_size"]
@@ -207,8 +215,12 @@ async def execute(run_id: int) -> None:
 
 
 async def fail_orphaned_runs() -> None:
-    """Runs execute in-process; any left 'running' after a restart are dead."""
+    """Runs execute in-process; any left 'running' after a restart are dead, except streamed
+    runs, which saved their position after every chunk and pick up from there."""
     await db.pool().execute(
         """update runs set status = 'failed', error = 'server restarted mid-run', finished_at = now()
-           where status in ('queued', 'running')"""
+           where status in ('queued', 'running') and stream_state is null"""
     )
+    for r in await db.pool().fetch("select id from runs where status in ('queued', 'running') and stream_state is not null"):
+        log.info("resuming streamed run %s", r["id"])
+        start(r["id"])

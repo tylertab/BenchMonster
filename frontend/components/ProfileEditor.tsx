@@ -2,24 +2,29 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { ExpectedOutputCard, guessExpected, type InputSet, inputSetProblems, toRef } from "@/components/InputSetEditor";
+import { ExpectedOutputCard, guessExpected, type InputSet, inputSetProblems, tableAsDataset, toRef } from "@/components/InputSetEditor";
 import { DEFAULT_PARAMS, ModelPicker } from "@/components/ModelPicker";
 import { buildScoringConfig, DEFAULT_SCORING, METHODS, OutputProcessing, ScoringConfig, scoringStateFrom, type ScoringState } from "@/components/ScoringConfig";
+import { FieldParsing } from "@/components/FieldParsing";
 import { RecordFilter } from "@/components/RecordFilter";
 import { VariableChips } from "@/components/TemplateView";
 import { Button, Card, compactInputClass, Empty, ErrorNote, Field, inputClass } from "@/components/ui";
 import {
   api,
   type Binding,
+  type Connection,
   type Dataset,
   type DatasetDetail,
+  type PgTable,
   type ProfileConfig,
   type Prompt,
   type RunMode,
   type RunParams,
   type ScoringMethod,
+  type TableInfo,
   WHOLE_RECORD,
 } from "@/lib/api";
+import { renderRow } from "@/lib/fields";
 import { isDefaultSelection } from "@/lib/selection";
 import { renderTemplate, templateVariables } from "@/lib/template";
 
@@ -53,11 +58,24 @@ function resolveMapping(fieldVars: string[], wholeVars: string[], columns: strin
   };
 }
 
+/** A record source that reads a connection's table directly. */
+function linkedSet(connectionId: number, connectionName: string, table: string, info: TableInfo, key: string): InputSet {
+  const types = Object.fromEntries(info.columns.map((c) => [c.name, c.type]));
+  const col = guessExpected(Object.keys(types));
+  return {
+    ...newInputSet(tableAsDataset({ connectionId, connectionName, table, types, primaryKey: info.primary_key }, info.approx_rows)),
+    expectedSource: col ? "column" : "none",
+    expectedColumn: col,
+    linked: { connectionId, connectionName, table, key, types, primaryKey: info.primary_key },
+  };
+}
+
 function newInputSet(d: Dataset): InputSet {
   const col = guessExpected(d.columns);
   return {
     key: newKey(), input: d, mapping: {}, expectedSource: col ? "column" : "none", expectedColumn: col,
     expectedDataset: null, matchBy: "key", inputKey: "", expectedKey: "", expectedValue: "row", selection: {},
+    fields: null, linked: null,
   };
 }
 
@@ -123,6 +141,8 @@ export function ProfileEditor({
 
   // A profile has at most one record source; every per-record variable reads it.
   const [sets, setSets] = useState<InputSet[]>([]);
+  // Tables of Postgres connections, offered as record sources that are read directly.
+  const [pgTables, setPgTables] = useState<{ connection: Connection; tables: PgTable[] }[]>([]);
   const [dropped, setDropped] = useState<string[]>([]);
   const [uploading, setUploading] = useState(false);
   const [expectedText, setExpectedText] = useState(initial?.config.expected_text ?? "");
@@ -145,20 +165,53 @@ export function ProfileEditor({
   };
 
   useEffect(() => {
+    api.connections().then(
+      (cs) =>
+        Promise.all(
+          cs
+            .filter((c) => c.kind === "postgres" && c.access?.read)
+            .map((c) => api.connectionTables(c.id).then((tables) => ({ connection: c, tables }), () => ({ connection: c, tables: [] as PgTable[] }))),
+        ).then(setPgTables),
+      () => {},
+    );
+  }, []);
+
+  useEffect(() => {
     Promise.all([api.prompts(), api.datasets()]).then(([ps, ds]) => {
       setPrompts(ps);
       setDatasets(ds);
       const byId = new Map(ds.map((d) => [d.id, d]));
-      if (initial) {
-        setMissing(initial.config.datasets.filter((r) => !byId.has(r.dataset_id) || (r.expected_dataset_id && !byId.has(r.expected_dataset_id))).length);
-        const usable = initial.config.datasets.filter((r) => byId.has(r.dataset_id) && (!r.expected_dataset_id || byId.has(r.expected_dataset_id)));
-        setDropped(usable.slice(1).map((r) => byId.get(r.dataset_id)!.filename));
+      const linkedRef = initial?.config.datasets.find((r) => r.source);
+      if (initial && linkedRef?.source) {
+        const src = linkedRef.source;
+        api.connections().then((cs) => {
+          const conn = cs.find((c) => c.id === src.connection_id);
+          if (!conn) return setMissing(1);
+          api.tableInfo(src.connection_id, src.table).then((info) => {
+            const set = linkedSet(conn.id, conn.name, src.table, info, src.key);
+            setSets([
+              {
+                ...set,
+                mapping: linkedRef.mapping,
+                expectedSource: linkedRef.expected_column ? "column" : "none",
+                expectedColumn: linkedRef.expected_column ?? "",
+                selection: linkedRef.selection ?? {},
+                fields: linkedRef.fields ?? null,
+              },
+            ]);
+          }, (e) => setError(e.message));
+        });
+      } else if (initial) {
+        const has = (id: number | null) => id != null && byId.has(id);
+        setMissing(initial.config.datasets.filter((r) => !has(r.dataset_id) || (r.expected_dataset_id && !byId.has(r.expected_dataset_id))).length);
+        const usable = initial.config.datasets.filter((r) => has(r.dataset_id) && (!r.expected_dataset_id || byId.has(r.expected_dataset_id)));
+        setDropped(usable.slice(1).map((r) => byId.get(r.dataset_id!)!.filename));
         setSets(
           usable
             .slice(0, 1)
             .map((r) => ({
               key: newKey(),
-              input: byId.get(r.dataset_id)!,
+              input: byId.get(r.dataset_id!)!,
               mapping: r.mapping,
               expectedSource: r.expected_dataset_id ? "dataset" : r.expected_column ? "column" : "none",
               expectedColumn: r.expected_column ?? "",
@@ -168,6 +221,8 @@ export function ProfileEditor({
               expectedKey: r.expected_key ?? "",
               expectedValue: r.expected_dataset_id && r.expected_column ? "column" : "row",
               selection: r.selection ?? {},
+              fields: r.fields ?? null,
+              linked: null,
             })),
         );
       } else {
@@ -189,13 +244,26 @@ export function ProfileEditor({
   const resolved = sets.map((s) => ({ ...s, mapping: resolveMapping(fieldVars, wholeVars, s.input.columns, s.mapping) }));
   const updateSet = (key: string, next: InputSet) => setSets((cur) => cur.map((s) => (s.key === key ? next : s)));
   const recordSet = resolved[0] ?? null;
-  // Choosing a file for any per-record variable sets the record source for all of them.
-  const chooseRecordFile = (id: number) => {
-    const d = datasets?.find((x) => x.id === id);
-    if (!d || recordSet?.input.id === id) return;
+  // Choosing a file (or table) for any per-record variable sets the record source for all of them.
+  // Values: "d:<dataset id>" or "t:<connection id>:<schema.table>".
+  const chooseRecordFile = (value: string) => {
+    if (value.startsWith("t:")) {
+      const [, connId, ...rest] = value.split(":");
+      const table = rest.join(":");
+      const conn = pgTables.find((c) => c.connection.id === Number(connId))?.connection;
+      if (!conn) return;
+      api.tableInfo(conn.id, table).then((info) => {
+        setSets([linkedSet(conn.id, conn.name, table, info, info.primary_key.length === 1 ? info.primary_key[0] : "")]);
+        setDropped([]);
+      }, (e) => setError(e.message));
+      return;
+    }
+    const d = datasets?.find((x) => x.id === Number(value.slice(2)));
+    if (!d || recordSet?.input.id === d.id) return;
     setSets([newInputSet(d)]);
     setDropped([]);
   };
+  const recordValue = recordSet ? (recordSet.linked ? `t:${recordSet.linked.connectionId}:${recordSet.linked.table}` : `d:${recordSet.input.id}`) : "";
   const setColumn = (v: string, col: string) => recordSet && updateSet(recordSet.key, { ...recordSet, mapping: { ...recordSet.mapping, [v]: col } });
   const uploadFile = async (files: FileList) => {
     setUploading(true);
@@ -212,15 +280,32 @@ export function ProfileEditor({
   const byId = new Map((datasets ?? []).map((d) => [d.id, d]));
 
   const firstId = perRecord ? resolved[0]?.input.id : undefined;
+  const firstLinked = perRecord ? resolved[0]?.linked ?? null : null;
+  const linkedKey = firstLinked?.key;
   useEffect(() => {
     if (!firstId) return;
     let alive = true;
-    api.dataset(firstId, 1).then((d) => alive && setPreview(d));
+    const src = firstLinked;
+    if (src) {
+      if (!src.key) return;
+      api
+        .previewStream(src.connectionId, { table: src.table, key: src.key, selection: {} })
+        .then((p) => alive && setPreview({ id: firstId, rows: p.rows } as unknown as DatasetDetail), () => {});
+    } else {
+      api.dataset(firstId, 1).then((d) => alive && setPreview(d));
+    }
     return () => {
       alive = false;
     };
-  }, [firstId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [firstId, linkedKey]);
   const shownPreview = firstId && preview?.id === firstId ? preview : null;
+  const sampleRow = (shownPreview?.rows[0] as Record<string, string> | undefined) ?? null;
+  const fieldTypes: Record<string, string | undefined> = recordSet
+    ? recordSet.linked
+      ? recordSet.linked.types
+      : Object.fromEntries(recordSet.input.columns.map((c) => [c, recordSet.input.schema?.properties?.[c]?.type as string | undefined]))
+    : {};
 
   const bindings: Record<string, Binding> = {};
   for (const v of variables) {
@@ -237,6 +322,7 @@ export function ProfileEditor({
   if (perRecord) {
     if (resolved.length === 0) problems.push(`Choose the file for ${recordVars.map((v) => `{{${v}}}`).join(", ")}.`);
     for (const s of resolved) {
+      if (s.linked && !s.linked.key) problems.push(`Choose the unique column to read ${s.linked.table} in order of.`);
       const unmapped = fieldVars.filter((v) => !s.mapping[v]);
       if (unmapped.length) problems.push(`Choose the field for ${unmapped.map((v) => `{{${v}}}`).join(", ")}.`);
       problems.push(...inputSetProblems(s, methodInfo.needsExpected, methodInfo.label));
@@ -292,10 +378,11 @@ export function ProfileEditor({
             const src = sourceOf(v);
             if (src === "text") return [v, texts[v] ?? ""];
             if (src === "dataset") return [v, inlines[v]?.datasetId ? `[dataset: ${byId.get(inlines[v].datasetId!)?.filename ?? "?"} as ${inlines[v].format}]` : `{{${v}}}`];
-            const row = shownPreview?.rows[0];
+            const row = sampleRow;
             if (!row) return [v, `{{${v}}}`];
-            if (src === "record") return [v, JSON.stringify(Object.fromEntries(resolved[0].input.columns.map((c) => [c, row[c]])))];
-            return [v, row[resolved[0].mapping[v]] ?? `{{${v}}}`];
+            const r = renderRow(row, resolved[0].input.columns, resolved[0].fields);
+            if (src === "record") return [v, r.record()];
+            return [v, resolved[0].mapping[v] ? r.value(resolved[0].mapping[v]) : `{{${v}}}`];
           }),
         );
   const totalInputs = perRecord ? resolved.reduce((a, s) => a + s.input.row_count, 0) : 1;
@@ -422,16 +509,28 @@ export function ProfileEditor({
                       {(src === "field" || src === "record") && (
                         <>
                           <select
-                            className={`${compactInputClass} max-w-64 ${recordSet ? "" : "border-critical"}`}
-                            value={recordSet?.input.id ?? ""}
-                            onChange={(e) => chooseRecordFile(Number(e.target.value))}
+                            className={`${compactInputClass} max-w-72 ${recordSet ? "" : "border-critical"}`}
+                            value={recordValue}
+                            onChange={(e) => chooseRecordFile(e.target.value)}
                             aria-label={`File for ${v}`}
                           >
-                            <option value="">choose file…</option>
-                            {datasets.map((d) => (
-                              <option key={d.id} value={d.id}>
-                                {d.filename} ({d.row_count} records)
-                              </option>
+                            <option value="">choose file or table…</option>
+                            <optgroup label="Files">
+                              {datasets.map((d) => (
+                                <option key={d.id} value={`d:${d.id}`}>
+                                  {d.filename} ({d.row_count} records)
+                                </option>
+                              ))}
+                            </optgroup>
+                            {pgTables.map(({ connection, tables }) => (
+                              <optgroup key={connection.id} label={`⇄ ${connection.name} (read directly, not copied)`}>
+                                {tables.map((t) => (
+                                  <option key={`${t.schema}.${t.name}`} value={`t:${connection.id}:${t.schema}.${t.name}`}>
+                                    {t.schema === "public" ? t.name : `${t.schema}.${t.name}`}
+                                    {t.approx_rows ? ` (~${t.approx_rows.toLocaleString()} rows)` : ""}
+                                  </option>
+                                ))}
+                              </optgroup>
                             ))}
                           </select>
                           {src === "field" && recordSet && (
@@ -492,7 +591,32 @@ export function ProfileEditor({
 
             {perRecord ? (
               <div className="space-y-1 rounded-md bg-surface-2/60 px-3 py-2 text-sm text-ink-2">
-                {recordSet ? (
+                {recordSet?.linked ? (
+                  <div className="space-y-1.5">
+                    <p>
+                      Each selected row of <span className="font-mono">{recordSet.linked.table}</span> in <strong>⇄ {recordSet.linked.connectionName}</strong> becomes one
+                      prompt. Rows are <strong>read from the database in chunks during the run</strong> (never copied); results keep each row&apos;s key.
+                    </p>
+                    <label className="flex flex-wrap items-center gap-2">
+                      <span>Read in order of</span>
+                      <select
+                        className={`${compactInputClass} ${recordSet.linked.key ? "" : "border-critical"}`}
+                        value={recordSet.linked.key}
+                        onChange={(e) => updateSet(recordSet.key, { ...recordSet, linked: { ...recordSet.linked!, key: e.target.value } })}
+                        aria-label="Key column"
+                      >
+                        <option value="">choose a unique column…</option>
+                        {recordSet.input.columns.map((c) => (
+                          <option key={c} value={c}>
+                            {c}
+                            {recordSet.linked!.primaryKey.includes(c) ? " (primary key)" : ""}
+                          </option>
+                        ))}
+                      </select>
+                      <span className="text-xs text-muted">a unique column, so runs can resume and results point back to their row</span>
+                    </label>
+                  </div>
+                ) : recordSet ? (
                   <p>
                     {isDefaultSelection(recordSet.selection) ? (
                       <>
@@ -529,8 +653,26 @@ export function ProfileEditor({
               </p>
             )}
 
+            {perRecord && recordSet && (!recordSet.linked || recordSet.linked.key) && (
+              <RecordFilter
+                key={`${recordSet.input.id}:${recordSet.linked?.key ?? ""}`}
+                dataset={recordSet.input}
+                value={recordSet.selection}
+                onChange={(sel) => updateSet(recordSet.key, { ...recordSet, selection: sel })}
+                linked={recordSet.linked ? { connectionId: recordSet.linked.connectionId, table: recordSet.linked.table, key: recordSet.linked.key } : null}
+              />
+            )}
+
             {perRecord && recordSet && (
-              <RecordFilter key={recordSet.input.id} dataset={recordSet.input} value={recordSet.selection} onChange={(sel) => updateSet(recordSet.key, { ...recordSet, selection: sel })} />
+              <FieldParsing
+                key={recordSet.input.id}
+                columns={recordSet.input.columns}
+                types={fieldTypes}
+                value={recordSet.fields}
+                onChange={(f) => updateSet(recordSet.key, { ...recordSet, fields: f })}
+                sample={sampleRow}
+                expectedColumn={recordSet.expectedSource === "column" ? recordSet.expectedColumn : undefined}
+              />
             )}
 
             {previewValues && (

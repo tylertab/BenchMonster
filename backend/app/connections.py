@@ -295,7 +295,11 @@ async def pg_tables(cfg: PgConfig, sec: PgSecret) -> list[dict]:
                       (select array_agg(c.column_name::text order by c.ordinal_position) from information_schema.columns c
                         where c.table_schema = t.table_schema and c.table_name = t.table_name) as columns,
                       coalesce((select greatest(cl.reltuples, 0)::bigint from pg_class cl join pg_namespace n on n.oid = cl.relnamespace
-                        where n.nspname = t.table_schema and cl.relname = t.table_name), 0) as approx_rows
+                        where n.nspname = t.table_schema and cl.relname = t.table_name), 0) as approx_rows,
+                      (select array_agg(a.attname::text order by array_position(i.indkey::int2[], a.attnum))
+                        from pg_index i join pg_attribute a on a.attrelid = i.indrelid and a.attnum = any(i.indkey)
+                        where i.indisprimary
+                          and i.indrelid = (quote_ident(t.table_schema) || '.' || quote_ident(t.table_name))::regclass) as primary_key
                from information_schema.tables t
                where t.table_schema not in ('pg_catalog', 'information_schema', 'toolkit_experimental')
                  and t.table_schema !~ '^_?timescaledb' and t.table_name !~ '^pg_stat_statements'
@@ -509,6 +513,172 @@ async def pg_schema(cfg: PgConfig, sec: PgSecret) -> list[dict]:
         name = r["table_name"] if r["table_schema"] == "public" else f"{r['table_schema']}.{r['table_name']}"
         tables.setdefault(name, []).append({"name": r["column_name"], "type": r["data_type"]})
     return [{"name": t, "columns": cols} for t, cols in tables.items()]
+
+
+# --- streaming a table as a record source ------------------------------------------
+
+STREAM_CHUNK = 200
+KEY_TYPES = {"smallint", "integer", "bigint", "numeric", "text", "character varying", "character", "uuid", "date",
+             "timestamp with time zone", "timestamp without time zone"}
+
+
+def split_table(table: str) -> tuple[str, str]:
+    schema, _, name = table.rpartition(".")
+    return schema or "public", name
+
+
+async def pg_table_info(cfg: PgConfig, sec: PgSecret, table: str) -> dict:
+    """{columns: [{name, type}], primary_key: [..], approx_rows} for one readable table or view."""
+    schema, name = split_table(table)
+    conn = await pg_connect(cfg, sec)
+    try:
+        cols = await conn.fetch(
+            """select column_name::text as name, data_type::text as type from information_schema.columns
+               where table_schema = $1 and table_name = $2 order by ordinal_position""", schema, name,
+        )
+        pk = await conn.fetchval(
+            """select array_agg(a.attname::text order by array_position(i.indkey::int2[], a.attnum))
+               from pg_index i join pg_attribute a on a.attrelid = i.indrelid and a.attnum = any(i.indkey)
+               where i.indisprimary and i.indrelid = (quote_ident($1) || '.' || quote_ident($2))::regclass""", schema, name,
+        )
+        approx = await conn.fetchval(
+            """select greatest(cl.reltuples, 0)::bigint from pg_class cl join pg_namespace n on n.oid = cl.relnamespace
+               where n.nspname = $1 and cl.relname = $2""", schema, name,
+        )
+    finally:
+        await conn.close()
+    if not cols:
+        raise ConnectionError_(f"table {table} not found (or no access)")
+    return {"columns": [dict(c) for c in cols], "primary_key": pk or [], "approx_rows": approx or 0}
+
+
+class StreamSpec(BaseModel):
+    """What to read: a table, its unique ordering key, and the record selection."""
+
+    table: str
+    key: str
+    rules: list = []
+    match: str = "all"
+    dedupe_on: str | None = None
+    pick: str = "all"
+    n: int | None = None
+    seed: int = 1
+
+
+def _relation(spec: StreamSpec, columns: dict[str, str], max_key: str | None, dedupe: bool = True) -> tuple[str, list]:
+    """A subquery of the selected rows (filters, key bound, dedupe) and its arguments."""
+    if spec.key not in columns:
+        raise ConnectionError_(f"key column {spec.key!r} is not in {spec.table}")
+    if columns[spec.key] not in KEY_TYPES:
+        raise ConnectionError_(f"key column {spec.key} has type {columns[spec.key]}; use an integer, text, uuid, date or timestamp column")
+    schema, name = split_table(spec.table)
+    rules, args = _where(spec.rules, set(columns), spec.match)
+    key = _ident(spec.key)
+    conds = [f"{key} is not null"] + ([f"({rules.removeprefix('where ')})"] if rules else [])
+    if max_key is not None:
+        args.append(max_key)
+        conds.append(f"{key} <= ${len(args)}::text::{columns[spec.key]}")
+    where = f"where {' and '.join(conds)}" if conds else ""
+    source = f"{_ident(schema)}.{_ident(name)}"
+    if spec.dedupe_on and dedupe:
+        if spec.dedupe_on not in columns:
+            raise ConnectionError_(f"dedupe field {spec.dedupe_on!r} is not in {spec.table}")
+        d = _ident(spec.dedupe_on)
+        return f"(select distinct on ({d}) * from {source} {where} order by {d}, {key}) s", args
+    return f"(select * from {source} {where}) s", args
+
+
+async def pg_stream_plan(cfg: PgConfig, sec: PgSecret, spec: StreamSpec) -> dict:
+    """Counts at the start of a run: {total, matched, selected, max_key}. max_key bounds the run so rows
+    inserted while it runs aren't picked up."""
+    info = await pg_table_info(cfg, sec, spec.table)
+    columns = {c["name"]: c["type"] for c in info["columns"]}
+    rel, args = _relation(spec, columns, None)
+    conn = await pg_connect(cfg, sec)
+    try:
+        async with conn.transaction(readonly=True):
+            await conn.execute(f"set local statement_timeout = '{PG_TIMEOUT_S * 4}s'")
+            row = await conn.fetchrow(f"select count(*) as n, max({_ident(spec.key)})::text as max_key from {rel}", *args)
+            unique = row["n"]
+            if spec.dedupe_on:
+                plain, pargs = _relation(spec, columns, None, dedupe=False)
+                row = {"n": await conn.fetchval(f"select count(*) from {plain}", *pargs), "max_key": row["max_key"]}
+    except asyncpg.PostgresError as e:
+        raise ConnectionError_(f"counting rows failed: {e}")
+    finally:
+        await conn.close()
+    matched = row["n"]
+    selected = min(unique, spec.n) if spec.pick != "all" and spec.n else unique
+    return {"total": info["approx_rows"], "matched": matched, "unique": unique, "selected": selected,
+            "max_key": row["max_key"], "columns": info["columns"]}
+
+
+async def pg_stream(cfg: PgConfig, sec: PgSecret, spec: StreamSpec, columns: dict[str, str], max_key: str | None,
+                    after_key: str | None, skip: int = 0, chunk: int = STREAM_CHUNK):
+    """Yield the selected rows in key order, `chunk` at a time, as {column: text}. Each chunk opens its own
+    short read-only connection, so a long run survives dropped connections. Resume with after_key
+    (and skip = rows already done, for first-N and random picks)."""
+    rel, args = _relation(spec, columns, max_key)
+    key = _ident(spec.key)
+    ktype = columns[spec.key]
+    limit_total = spec.n if spec.pick in ("first", "random") and spec.n else None
+
+    random_keys: list[str] | None = None
+    if spec.pick == "random" and spec.n:
+        conn = await pg_connect(cfg, sec)
+        try:
+            async with conn.transaction(readonly=True):
+                await conn.execute(f"set local statement_timeout = '{PG_TIMEOUT_S * 4}s'")
+                random_keys = [r[0] for r in await conn.fetch(
+                    f"""select x.k::text as key_text from (select {key} as k from {rel} order by md5({key}::text || ${len(args) + 1}::text)
+                        limit {int(spec.n)}) x order by x.k""", *args, str(spec.seed),
+                )]
+        finally:
+            await conn.close()
+        random_keys = random_keys[skip:]
+
+    produced = skip
+    while True:
+        if limit_total is not None and produced >= limit_total:
+            return
+        conn = await pg_connect(cfg, sec)
+        try:
+            async with conn.transaction(readonly=True):
+                await conn.execute(f"set local statement_timeout = '{PG_TIMEOUT_S * 2}s'")
+                if random_keys is not None:
+                    batch, random_keys = random_keys[:chunk], random_keys[chunk:]
+                    if not batch:
+                        return
+                    stmt = await conn.prepare(f"select * from {rel} where {key} = any(${len(args) + 1}::text[]::{ktype}[]) order by {key}")
+                    records = await stmt.fetch(*args, batch)
+                else:
+                    n = chunk if limit_total is None else min(chunk, limit_total - produced)
+                    cond, extra = "", []
+                    if after_key is not None:
+                        cond, extra = f"where {key} > ${len(args) + 1}::text::{ktype}", [after_key]
+                    stmt = await conn.prepare(f"select * from {rel} {cond} order by {key} limit {int(n)}")
+                    records = await stmt.fetch(*args, *extra)
+                names = [a.name for a in stmt.get_attributes()]
+        except asyncpg.PostgresError as e:
+            raise ConnectionError_(f"reading {spec.table} failed: {e}")
+        finally:
+            await conn.close()
+        if not records:
+            return
+        rows = [{c: (None if r[i] is None else _cell(r[i])) for i, c in enumerate(names)} for r in records]
+        produced += len(rows)
+        after_key = rows[-1][spec.key]
+        yield rows
+
+
+async def pg_stream_preview(cfg: PgConfig, sec: PgSecret, spec: StreamSpec, limit: int = 5) -> dict:
+    plan = await pg_stream_plan(cfg, sec, spec)
+    columns = {c["name"]: c["type"] for c in plan["columns"]}
+    rows: list[dict] = []
+    async for chunk in pg_stream(cfg, sec, spec, columns, plan["max_key"], None, chunk=limit):
+        rows = chunk
+        break
+    return {**{k: plan[k] for k in ("total", "matched", "unique", "selected")}, "rows": rows, "columns": plan["columns"]}
 
 
 # --- dispatch ----------------------------------------------------------------------

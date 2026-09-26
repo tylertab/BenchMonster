@@ -94,7 +94,7 @@ export type ConnectionIn = {
   allow_write: boolean;
 };
 export type BrowseResult = { folder: string; folders: string[]; files: { path: string; size: number; modified: string }[]; truncated: boolean };
-export type PgTable = { schema: string; name: string; type: string; columns: string[]; approx_rows: number };
+export type PgTable = { schema: string; name: string; type: string; columns: string[]; approx_rows: number; primary_key: string[] | null };
 export type ImportIn = {
   path?: string;
   table?: string;
@@ -105,6 +105,13 @@ export type ImportIn = {
   description?: string;
   auto_refresh?: boolean;
 };
+
+/** A connection's table read directly as a record source (streamed during the run, never copied). */
+export type LinkedSource = { connection_id: number; table: string; key: string };
+export type ParseAs = "auto" | "text" | "integer" | "number" | "boolean" | "json";
+/** One column that reaches the prompt: its name in the record JSON and how it's parsed. */
+export type FieldSpec = { column: string; name?: string | null; parse?: ParseAs; decimals?: number | null };
+export type TableInfo = { columns: { name: string; type: string }[]; primary_key: string[]; approx_rows: number };
 
 export type FilterOp = "eq" | "neq" | "in" | "not_in" | "contains" | "not_contains" | "gt" | "gte" | "lt" | "lte" | "empty" | "not_empty" | "regex";
 export type FilterRule = { field: string; op: FilterOp; value: string };
@@ -200,6 +207,8 @@ export type RunDataset = {
   input_key: string | null;
   expected_key: string | null;
   selection: RecordSelection;
+  source: LinkedSource | null;
+  fields: FieldSpec[] | null;
   rows: number;
 };
 
@@ -234,13 +243,15 @@ export type Run = {
 };
 
 export type DatasetRef = {
-  dataset_id: number;
+  dataset_id: number | null;
   mapping: Record<string, string>;
   expected_column: string | null;
   expected_dataset_id: number | null;
   input_key: string | null;
   expected_key: string | null;
   selection?: RecordSelection;
+  source?: LinkedSource | null;
+  fields?: FieldSpec[] | null;
 };
 
 /** A prompt variable that doesn't vary per record. */
@@ -348,15 +359,17 @@ export function versionToConfig(v: ProfileVersion): ProfileConfig {
     system_prompt: v.system_prompt,
     template: v.template,
     datasets: v.datasets
-      .filter((d) => d.dataset_id)
+      .filter((d) => d.dataset_id || d.source)
       .map((d) => ({
-        dataset_id: d.dataset_id!,
+        dataset_id: d.dataset_id,
         mapping: d.mapping,
         expected_column: d.expected_column,
         expected_dataset_id: d.expected_dataset_id,
         input_key: d.input_key,
         expected_key: d.expected_key,
         selection: d.selection,
+        source: d.source,
+        fields: d.fields,
       })),
     scoring_method: v.scoring_method,
     scoring_config: v.scoring_config,
@@ -525,6 +538,9 @@ export const api = {
   recheckConnection: (id: number) => post<Connection>(`/connections/${id}/check`, {}),
   deleteConnection: (id: number) => del<{ ok: boolean }>(`/connections/${id}`),
   browseConnection: (id: number, folder = "") => request<BrowseResult>(`/connections/${id}/browse?folder=${encodeURIComponent(folder)}`),
+  tableInfo: (id: number, table: string) => request<TableInfo>(`/connections/${id}/table?name=${encodeURIComponent(table)}`),
+  previewStream: (id: number, body: { table: string; key: string; selection: RecordSelection }) =>
+    post<SelectionPreview & { columns: TableInfo["columns"] }>(`/connections/${id}/select`, body),
   connectionTables: (id: number) => request<PgTable[]>(`/connections/${id}/tables`),
   importFromConnection: (id: number, body: ImportIn) => post<{ id: number }>(`/connections/${id}/import`, body),
   refreshDataset: (id: number) => post<{ changed: boolean; row_count?: number; dataset: DatasetDetail }>(`/datasets/${id}/refresh`, {}),

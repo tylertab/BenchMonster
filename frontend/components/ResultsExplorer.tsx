@@ -82,10 +82,14 @@ export function ResultsExplorer({ runId, models, refreshKey }: { runId: number; 
                                 </div>
                               ))}
                             </dd>
-                            <details className="mt-2">
-                              <summary className="cursor-pointer text-xs text-muted">Rendered prompt</summary>
-                              <pre className="mt-1 whitespace-pre-wrap font-mono text-xs">{r.prompt}</pre>
-                            </details>
+                            {r.prompt ? (
+                              <details className="mt-2">
+                                <summary className="cursor-pointer text-xs text-muted">Rendered prompt</summary>
+                                <pre className="mt-1 whitespace-pre-wrap font-mono text-xs">{r.prompt}</pre>
+                              </details>
+                            ) : (
+                              <p className="mt-2 text-xs text-muted">Read from the database during the run; the prompt isn&apos;t stored, only the row&apos;s key above.</p>
+                            )}
                           </div>
                           <div>
                             <dt className="text-xs text-muted">Expected</dt>

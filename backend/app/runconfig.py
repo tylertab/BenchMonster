@@ -15,10 +15,13 @@ from fastapi import HTTPException
 from pydantic import BaseModel, Field
 
 from . import datasets as ds_lib
+from . import connections as conns
 from . import db, linked, runner, scoring, templates
+from . import fields as field_lib
 from . import selection as sel
 
 MAX_INPUTS = 10_000
+MAX_STREAMED_INPUTS = 1_000_000  # records per run read from a connection's table
 MAX_INLINE_CHARS = 200_000  # a whole dataset / fixed text inlined into the prompt
 MAX_TOTAL_PROMPT_CHARS = 50_000_000  # inline values are repeated in every stored prompt
 RECORD = "$record"  # mapping value: the whole record, as typed JSON
@@ -34,10 +37,24 @@ class Binding(BaseModel):
     format: Literal["json", "jsonl", "csv"] = "json"
 
 
-class DatasetRef(BaseModel):
-    """A record source: each row becomes one prompt; plus where its expected outputs come from."""
+class LinkedSource(BaseModel):
+    """A table read straight from a Postgres connection, in `key` order, during the run."""
 
-    dataset_id: int
+    connection_id: int
+    table: str = Field(min_length=1, max_length=300)
+    key: str = Field(min_length=1, max_length=200)  # unique column the run pages through
+
+
+class DatasetRef(BaseModel):
+    """A record source: each row becomes one prompt; plus where its expected outputs come from.
+
+    Either an uploaded/imported dataset (dataset_id) or a connection's table (source).
+    """
+
+    dataset_id: int | None = None
+    source: LinkedSource | None = None
+    # Which columns reach the prompt and how they're parsed. None = every column, parsed automatically.
+    fields: list[field_lib.FieldSpec] | None = Field(None, max_length=200)
     mapping: dict[str, str] = {}  # {template variable: input column, or "$record" for the whole row}
     # Expected outputs: a column of the input file, or (with expected_dataset_id) a
     # separate dataset matched by input_key <-> expected_key, or by row order if no
@@ -81,12 +98,13 @@ class RunConfig(BaseModel):
 
 
 class Prepared(BaseModel):
-    """A validated config: datasets resolved and every input rendered."""
+    """A validated config: datasets resolved and every input rendered (unless streamed)."""
 
-    # (position, dataset_id, name, filename, mapping, expected_column,
-    #  expected_dataset_id, expected_filename, input_key, expected_key, selection)
+    # (position, dataset_id, name, filename, mapping, expected_column, expected_dataset_id,
+    #  expected_filename, input_key, expected_key, selection, source, fields)
     datasets: list[tuple]
     inputs: list[tuple]  # (position, row_idx, variables, prompt, expected)
+    streamed: bool = False  # the record source is a connection's table, read during the run
 
 
 async def _rows(dataset_id: int):
@@ -162,13 +180,18 @@ async def prepare(org_id: int, cfg: RunConfig, *, render: bool = True) -> Prepar
         if not render:
             return Prepared(datasets=[], inputs=[])
         return Prepared(
-            datasets=[(0, None, None, "(single prompt)", {}, None, None, None, None, None, {})],
+            datasets=[(0, None, None, "(single prompt)", {}, None, None, None, None, None, {}, None, None)],
             inputs=[(0, 0, labels, templates.render(cfg.template, constants), (cfg.expected_text or "").strip() or None)],
         )
 
     inline_chars = sum(len(v) for v in constants.values())
     datasets, inputs = [], []
     for pos, ref in enumerate(cfg.datasets):
+        if ref.source:
+            datasets.append(await _prepare_linked(org_id, cfg, ref, record_vars, pos))
+            continue
+        if not ref.dataset_id:
+            raise HTTPException(400, "each record source needs a dataset or a connection table")
         ds = await pool.fetchrow(
             "select id, name, filename, columns, schema from datasets where id = $1 and org_id = $2", ref.dataset_id, org_id
         )
@@ -204,11 +227,14 @@ async def prepare(org_id: int, cfg: RunConfig, *, render: bool = True) -> Prepar
         datasets.append((pos, ds["id"], ds["name"], ds["filename"], mapping, ref.expected_column,
                          exp["id"] if exp else None, exp["filename"] if exp else None,
                          ref.input_key if exp else None, ref.expected_key if exp else None,
-                         {} if ref.selection.is_default() else ref.selection.model_dump(exclude_defaults=True)))
+                         {} if ref.selection.is_default() else ref.selection.model_dump(exclude_defaults=True),
+                         None, _fields_json(ref.fields)))
+        field_lib.validate(ref.fields, ds["columns"], ds["filename"])
         if not render:
             continue
         rows = await _rows(ds["id"])
-        schema = _schema_of(ds, rows) if RECORD in mapping.values() else None
+        schema = _schema_of(ds, rows) if RECORD in mapping.values() or ref.fields is not None else None
+        renderer = field_lib.RowRenderer(ref.fields, ds["columns"], schema) if ref.fields is not None else None
         expected_for = _expected_lookup(ref, exp, await pool.fetch(
             "select idx, data from dataset_rows where dataset_id = $1 order by idx", exp["id"]
         ) if exp else None)
@@ -217,10 +243,13 @@ async def prepare(org_id: int, cfg: RunConfig, *, render: bool = True) -> Prepar
             raise HTTPException(400, f"{ds['filename']}: the record filters match none of its {stats.total} records")
         unmatched = 0
         for i, r in picked:
-            values = {
-                v: json.dumps(ds_lib.typed_row(r["data"], schema, order=ds["columns"]), ensure_ascii=False) if c == RECORD else r["data"].get(c, "")
-                for v, c in mapping.items()
-            }
+            if renderer:
+                values = {v: renderer.record(r["data"]) if c == RECORD else renderer.value(r["data"], c) for v, c in mapping.items()}
+            else:
+                values = {
+                    v: json.dumps(ds_lib.typed_row(r["data"], schema, order=ds["columns"]), ensure_ascii=False) if c == RECORD else r["data"].get(c, "")
+                    for v, c in mapping.items()
+                }
             expected = expected_for(i, r["data"])
             if exp and expected is None:
                 unmatched += 1
@@ -232,9 +261,52 @@ async def prepare(org_id: int, cfg: RunConfig, *, render: bool = True) -> Prepar
             raise HTTPException(400, f"too many inputs ({len(inputs)}+); the limit is {MAX_INPUTS}")
         if inline_chars * len(inputs) > MAX_TOTAL_PROMPT_CHARS:
             raise HTTPException(400, f"inlined values ({inline_chars:,} chars) repeated across {len(inputs):,}+ prompts is too large; use fewer records or a smaller inlined dataset")
-    if render and not inputs:
+    streamed = any(ref.source for ref in cfg.datasets)
+    if render and not inputs and not streamed:
         raise HTTPException(400, "the selected datasets have no rows")
-    return Prepared(datasets=datasets, inputs=inputs)
+    return Prepared(datasets=datasets, inputs=inputs, streamed=streamed)
+
+
+def _fields_json(specs: list[field_lib.FieldSpec] | None) -> list | None:
+    return None if specs is None else [f.model_dump(exclude_none=True, exclude_defaults=True) for f in specs]
+
+
+def stream_spec(source: dict, selection: dict | None) -> conns.StreamSpec:
+    s = sel.Selection(**(selection or {}))
+    return conns.StreamSpec(table=source["table"], key=source["key"], rules=s.rules, match=s.match,
+                            dedupe_on=s.dedupe_on, pick=s.pick, n=s.n, seed=s.seed)
+
+
+async def _prepare_linked(org_id: int, cfg: RunConfig, ref: DatasetRef, record_vars: list[str], pos: int) -> tuple:
+    """Validate a connection-table record source against the table's columns (rows are read at run time)."""
+    label = ref.source.table
+    if len(cfg.datasets) > 1:
+        raise HTTPException(400, "a database table must be the only record source")
+    if ref.expected_dataset_id:
+        raise HTTPException(400, f"{label}: expected outputs from a database table come from one of its columns")
+    conn, pcfg, psec = await linked.load_connection(org_id, ref.source.connection_id)
+    if conn["kind"] != "postgres":
+        raise HTTPException(400, f"{conn['name']} isn't a database; import a file from it as a dataset instead")
+    info = await conns.pg_table_info(pcfg, psec, ref.source.table)
+    types = {c["name"]: c["type"] for c in info["columns"]}
+    cols = list(types)
+    if ref.source.key not in types:
+        raise HTTPException(400, f"{label}: no key column {ref.source.key!r}")
+    if types[ref.source.key] not in conns.KEY_TYPES:
+        raise HTTPException(400, f"{label}: key column {ref.source.key} is {types[ref.source.key]}; choose an integer, text, uuid, date or timestamp column")
+    mapping = {v: ref.mapping.get(v) or v for v in record_vars}
+    missing = [f"{{{{{v}}}}} → {c}" for v, c in mapping.items() if c != RECORD and c not in types]
+    if missing:
+        raise HTTPException(400, f"{label}: no column for {', '.join(missing)}")
+    if ref.expected_column and ref.expected_column not in types:
+        raise HTTPException(400, f"{label}: no column {ref.expected_column!r}")
+    if cfg.scoring_method in NEEDS_EXPECTED and not ref.expected_column:
+        raise HTTPException(400, f"{label}: {cfg.scoring_method} scoring needs an expected-output column")
+    field_lib.validate(ref.fields, cols, label)
+    sel.validate(ref.selection, cols, label)
+    return (pos, None, conn["name"], ref.source.table, mapping, ref.expected_column, None, None, None, None,
+            {} if ref.selection.is_default() else ref.selection.model_dump(exclude_defaults=True),
+            ref.source.model_dump(), _fields_json(ref.fields))
 
 
 def _expected_lookup(ref: DatasetRef, exp, exp_rows):
@@ -281,24 +353,36 @@ async def create_run(
     profile_id: int | None = None, profile_version: int | None = None, label: str | None = None,
 ) -> int:
     await linked.refresh_for_run(org_id, {
-        *(r.dataset_id for r in cfg.datasets), *(r.expected_dataset_id for r in cfg.datasets if r.expected_dataset_id),
+        *(r.dataset_id for r in cfg.datasets if r.dataset_id), *(r.expected_dataset_id for r in cfg.datasets if r.expected_dataset_id),
         *(b.dataset_id for b in cfg.bindings.values() if b.type == "dataset" and b.dataset_id),
     })
     prepared = await prepare(org_id, cfg)
+    total, stream_state = len(prepared.inputs), None
+    if prepared.streamed:
+        # Count what the run will read, and bound it by the current highest key.
+        ref = cfg.datasets[0]
+        _, pcfg, psec = await linked.load_connection(org_id, ref.source.connection_id)
+        plan = await conns.pg_stream_plan(pcfg, psec, stream_spec(ref.source.model_dump(), ref.selection.model_dump()))
+        if not plan["selected"]:
+            raise HTTPException(400, f"{ref.source.table}: no rows match the record selection")
+        if plan["selected"] > MAX_STREAMED_INPUTS:
+            raise HTTPException(400, f"{ref.source.table}: {plan['selected']:,} records selected; the limit per run is {MAX_STREAMED_INPUTS:,}. Filter or sample fewer.")
+        total, stream_state = plan["selected"], {"max_key": plan["max_key"], "last_key": None, "done": 0}
     async with db.pool().acquire() as conn, conn.transaction():
         run_id = await conn.fetchval(
             """insert into runs (org_id, name, prompt_name, system_prompt, template, scoring_method, scoring_config,
-                   params, total_inputs, output_name, created_by, profile_id, profile_version, bindings, expected_text)
-               values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) returning id""",
+                   params, total_inputs, output_name, created_by, profile_id, profile_version, bindings, expected_text,
+                   stream_state)
+               values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16) returning id""",
             org_id, (name or "").strip() or None, cfg.prompt_name, (cfg.system_prompt or "").strip() or None,
-            cfg.template, cfg.scoring_method, cfg.scoring_config, cfg.params(), len(prepared.inputs),
+            cfg.template, cfg.scoring_method, cfg.scoring_config, cfg.params(), total,
             output_name(output, label or cfg.prompt_name), user_id, profile_id, profile_version,
-            cfg.bindings_json(), (cfg.expected_text or "").strip() or None,
+            cfg.bindings_json(), (cfg.expected_text or "").strip() or None, stream_state,
         )
         await conn.executemany(
             """insert into run_datasets (run_id, position, dataset_id, dataset_name, filename, mapping, expected_column,
-                   expected_dataset_id, expected_filename, input_key, expected_key, selection)
-               values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)""",
+                   expected_dataset_id, expected_filename, input_key, expected_key, selection, source, fields)
+               values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)""",
             [(run_id, *d) for d in prepared.datasets],
         )
         await conn.executemany(

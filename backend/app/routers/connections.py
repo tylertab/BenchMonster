@@ -7,7 +7,8 @@ import asyncpg
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, model_validator
 
-from .. import auth, db, linked, selection
+from .. import auth, db, linked
+from .. import selection as sel_lib
 from .. import connections as conns
 
 router = APIRouter(prefix="/api/connections", tags=["connections"])
@@ -135,11 +136,42 @@ async def tables(connection_id: int, ctx: auth.Ctx = Depends(auth.current_ctx)):
     return await conns.pg_tables(cfg, sec)
 
 
+@router.get("/{connection_id}/table")
+async def table_info(connection_id: int, name: str, ctx: auth.Ctx = Depends(auth.current_ctx)):
+    """Columns (with types), primary key and approximate size of one table."""
+    conn, cfg, sec = await linked.load_connection(ctx.org_id, connection_id)
+    if conn["kind"] != "postgres":
+        raise HTTPException(400, "tables are for databases")
+    return await conns.pg_table_info(cfg, sec, name)
+
+
+class StreamPreviewIn(BaseModel):
+    table: str = Field(min_length=1, max_length=300)
+    key: str = Field(min_length=1, max_length=200)
+    selection: sel_lib.Selection = sel_lib.Selection()
+
+
+@router.post("/{connection_id}/select")
+async def preview_stream(connection_id: int, body: StreamPreviewIn, ctx: auth.Ctx = Depends(auth.current_ctx)):
+    """How many rows of a table a record selection reads, plus the first few (for a streamed record source)."""
+    conn, cfg, sec = await linked.load_connection(ctx.org_id, connection_id)
+    if conn["kind"] != "postgres":
+        raise HTTPException(400, "tables are for databases")
+    info = await conns.pg_table_info(cfg, sec, body.table)
+    sel_lib.validate(body.selection, [c["name"] for c in info["columns"]], body.table)
+    spec = conns.StreamSpec(table=body.table, key=body.key, rules=body.selection.rules, match=body.selection.match,
+                            dedupe_on=body.selection.dedupe_on, pick=body.selection.pick, n=body.selection.n,
+                            seed=body.selection.seed)
+    out = await conns.pg_stream_preview(cfg, sec, spec)
+    return {**out, "description": body.selection.describe(),
+            "rows": [{"idx": i, **r} for i, r in enumerate(out["rows"])]}
+
+
 class ImportIn(BaseModel):
     path: str | None = Field(None, max_length=1000)  # object storage: file path
     table: str | None = Field(None, max_length=300)  # database: schema.table
     query: str | None = Field(None, max_length=20000)  # database: a read-only SELECT
-    rules: list[selection.Rule] = Field([], max_length=20)  # database table: filters applied in SQL
+    rules: list[sel_lib.Rule] = Field([], max_length=20)  # database table: filters applied in SQL
     match: Literal["all", "any"] = "all"
     name: str | None = Field(None, max_length=200)
     description: str | None = Field(None, max_length=5000)
