@@ -52,11 +52,13 @@ export function Header() {
   return (
     <header className="border-b border-line bg-surface">
       <nav className="mx-auto flex max-w-7xl items-center gap-5 px-4 py-3">
-        <Link href="/" className="flex items-center gap-2 font-semibold tracking-tight">
-          <span aria-hidden className="grid h-7 w-7 place-items-center rounded-md bg-accent text-sm text-white">
-            B
-          </span>
-          BenchMonster
+        <Link href="/" className="flex shrink-0 items-center gap-2" aria-label="BenchMonster home">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/brand/monster.png" alt="" className="h-9 w-auto" />
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/brand/wordmark.png" alt="BenchMonster" className="h-5 w-auto dark:hidden" />
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/brand/wordmark-dark.png" alt="BenchMonster" className="hidden h-5 w-auto dark:block" />
         </Link>
         {me && (
           <>
