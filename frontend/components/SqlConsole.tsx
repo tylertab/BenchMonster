@@ -42,6 +42,17 @@ export function ResultTable({ columns, rows }: { columns: string[]; rows: unknow
   );
 }
 
+const SHORT_TYPES: Record<string, string> = {
+  "double precision": "float",
+  "timestamp with time zone": "timestamptz",
+  "timestamp without time zone": "timestamp",
+  "character varying": "varchar",
+  integer: "int",
+  bigint: "int8",
+  boolean: "bool",
+};
+const shortType = (t: string) => SHORT_TYPES[t] ?? t;
+
 export function SqlConsole({ presets, sql, onSqlChange }: { presets: Preset[]; sql: string; onSqlChange: (s: string) => void }) {
   const [schema, setSchema] = useState<SchemaTable[]>([]);
   const [result, setResult] = useState<QueryResult | null>(null);
@@ -180,8 +191,8 @@ export function SqlConsole({ presets, sql, onSqlChange }: { presets: Preset[]; s
         ))}
       </div>
 
-      <div className="mt-3 grid gap-3 md:grid-cols-[180px_1fr]">
-        <aside className="max-h-80 overflow-y-auto text-xs">
+      <div className="mt-3 grid gap-3 md:grid-cols-[minmax(13rem,16rem)_minmax(0,1fr)]">
+        <aside className="max-h-96 min-w-0 overflow-y-auto text-xs">
           <div className="mb-1 font-medium text-muted">Saved queries</div>
           {saved.length === 0 ? (
             <p className="mb-3 text-muted">None yet. Write a query and click Save.</p>
@@ -211,17 +222,18 @@ export function SqlConsole({ presets, sql, onSqlChange }: { presets: Preset[]; s
           <div className="mb-1 font-medium text-muted">Views</div>
           {schema.map((t) => (
             <div key={t.name}>
-              <button type="button" className="w-full py-0.5 text-left font-mono font-medium hover:text-accent" onClick={() => setOpenTable(openTable === t.name ? null : t.name)}>
-                {openTable === t.name ? "▾" : "▸"} {t.name}
+              <button type="button" className="flex w-full gap-1 py-0.5 text-left font-mono font-medium hover:text-accent" title={t.name} onClick={() => setOpenTable(openTable === t.name ? null : t.name)}>
+                <span className="shrink-0">{openTable === t.name ? "▾" : "▸"}</span>
+                <span className="min-w-0 break-all">{t.name}</span>
               </button>
               {openTable === t.name && (
                 <ul className="mb-1 ml-3">
                   {t.columns.map((c) => (
-                    <li key={c.name} className="flex justify-between gap-2 font-mono">
-                      <button type="button" className="truncate text-left hover:text-accent" onClick={() => onSqlChange(`${sql}${sql.endsWith(" ") || !sql ? "" : " "}${c.name}`)}>
+                    <li key={c.name} className="flex items-baseline justify-between gap-2 font-mono">
+                      <button type="button" className="min-w-0 break-all text-left hover:text-accent" title={`${c.name} (${c.type})`} onClick={() => onSqlChange(`${sql}${sql.endsWith(" ") || !sql ? "" : " "}${c.name}`)}>
                         {c.name}
                       </button>
-                      <span className="text-muted">{c.type.replace("double precision", "float").replace("timestamp with time zone", "timestamptz")}</span>
+                      <span className="shrink-0 text-muted">{shortType(c.type)}</span>
                     </li>
                   ))}
                 </ul>
