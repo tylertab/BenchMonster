@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from . import db, runner
 from .config import settings
-from .routers import benchmarks, models, query, runs
+from .routers import assistant, benchmarks, models, query, runs
 
 log = logging.getLogger("uvicorn.error")
 
@@ -34,6 +34,7 @@ app.include_router(models.router)
 app.include_router(benchmarks.router)
 app.include_router(runs.router)
 app.include_router(query.router)
+app.include_router(assistant.router)
 
 
 @app.get("/api/health")

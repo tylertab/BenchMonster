@@ -17,6 +17,7 @@ class Settings(BaseSettings):
 
     backboard_api_key: str = ""
     backboard_base_url: str = "https://app.backboard.io/api"
+    backboard_assistant_id: str = ""
 
     elevenlabs_api_key: str = ""
     elevenlabs_agent_id: str = ""
