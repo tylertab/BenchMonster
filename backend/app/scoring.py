@@ -9,6 +9,12 @@ Methods (benchmark.scoring_method) and their scoring_config keys:
   json_fields  fields (default: every key in expected), schema (optional), pass_threshold (1.0):
                score = fraction of fields whose value matches the expected JSON
   llm_judge    rubric (optional), pass_threshold (0.7)
+
+Every method first applies output processing (scoring_config["extract"]) to the
+model's raw reply; the processed value is what gets compared and is stored:
+  {"type": "none"}                               the reply, trimmed (default)
+  {"type": "json_field", "path": "a.b"}          parse JSON in the reply, take a (dotted) field
+  {"type": "regex", "pattern": "...", "group": 1} first regex match (capture group, default 1 or 0)
 """
 
 import json
@@ -32,6 +38,39 @@ class Score:
     score: float
     passed: bool
     rationale: str | None = None
+    processed: str | None = None  # the processed output that was compared
+
+
+class ExtractError(ValueError):
+    pass
+
+
+def process_output(cfg: dict, output: str) -> str:
+    """Apply the profile's output processing to a raw model reply."""
+    ex = cfg.get("extract") or {}
+    kind = ex.get("type") or "none"
+    text = (output or "").strip()
+    if kind == "none":
+        return text
+    if kind == "json_field":
+        try:
+            data = _parse_json(text)
+        except (json.JSONDecodeError, ValueError):
+            raise ExtractError("reply is not valid JSON")
+        value = _get(data, ex.get("path") or "")
+        if value is _MISSING:
+            raise ExtractError(f"reply JSON has no field {ex.get('path')!r}")
+        return value if isinstance(value, str) else json.dumps(value)
+    if kind == "regex":
+        try:
+            m = re.search(ex.get("pattern") or "", text, re.DOTALL | (0 if ex.get("case_sensitive") else re.IGNORECASE))
+        except re.error as e:
+            raise ExtractError(f"bad extraction regex: {e}")
+        if not m:
+            raise ExtractError("extraction regex did not match the reply")
+        group = ex.get("group", 1 if m.groups() else 0)
+        return (m.group(group) or "").strip()
+    raise ExtractError(f"unknown output processing {kind!r}")
 
 
 def _normalize(s: str, case_sensitive: bool) -> str:
@@ -197,6 +236,13 @@ async def judge(cfg: dict, input_: str, expected: str | None, output: str) -> Sc
 
 
 async def score(method: str, cfg: dict, input_: str, expected: str | None, output: str) -> Score:
+    try:
+        processed = process_output(cfg, output)
+    except ExtractError as e:
+        return Score(0.0, False, f"output processing: {e}", None)
     if method == "llm_judge":
-        return await judge(cfg, input_, expected, output)
-    return score_rule_based(method, cfg, expected, output)
+        s = await judge(cfg, input_, expected, processed)
+    else:
+        s = score_rule_based(method, cfg, expected, processed)
+    s.processed = processed
+    return s

@@ -146,7 +146,7 @@ async def get_results(run_id: int, model_id: int | None = None, only_failed: boo
     await auth.run_in_org(run_id, ctx.org_id)
     rows = await db.pool().fetch(
         """select res.id, res.model_id, m.display_name as model, rd.filename as input_file,
-                  ri.row_idx, ri.variables, ri.prompt, ri.expected, res.output, res.score, res.passed,
+                  ri.row_idx, ri.variables, ri.prompt, ri.expected, res.output, res.processed_output, res.score, res.passed,
                   res.judge_rationale, res.latency_ms, res.ttft_ms, res.tokens_in, res.tokens_out,
                   res.reasoning_tokens, res.cost_usd, res.error
            from results res
@@ -164,7 +164,7 @@ async def get_results(run_id: int, model_id: int | None = None, only_failed: boo
 
 
 PREDICTION_COLUMNS = [
-    "prediction", "expected", "score", "passed", "judge_rationale", "latency_ms", "ttft_ms",
+    "prediction", "processed_output", "expected", "score", "passed", "judge_rationale", "latency_ms", "ttft_ms",
     "tokens_in", "tokens_out", "reasoning_tokens", "tokens_per_sec", "cost_usd", "error",
 ]
 
@@ -180,7 +180,7 @@ async def predictions(run_id: int, ctx: auth.Ctx = Depends(auth.current_ctx)):
     variables = templates.variables(run["template"])
     rows = await db.pool().fetch(
         """select rd.filename as input_file, ri.row_idx, ri.variables, ri.prompt, m.display_name as model,
-                  m.model_id, res.output as prediction, ri.expected, res.score, res.passed, res.judge_rationale,
+                  m.model_id, res.output as prediction, res.processed_output, ri.expected, res.score, res.passed, res.judge_rationale,
                   res.latency_ms, res.ttft_ms, res.tokens_in, res.tokens_out, res.reasoning_tokens,
                   res.tokens_per_sec, res.cost_usd, res.error
            from results res

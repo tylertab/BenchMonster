@@ -82,11 +82,11 @@ async def _run_input(run_id: int, run, model, inp, params, sem: asyncio.Semaphor
     await db.pool().execute(
         """insert into results (run_id, input_id, model_id, output, reasoning, score, passed,
                judge_rationale, latency_ms, ttft_ms, tokens_in, tokens_out, reasoning_tokens,
-               tokens_per_sec, cost_usd, error, attempts)
-           values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)""",
+               tokens_per_sec, cost_usd, error, attempts, processed_output)
+           values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)""",
         run_id, inp["id"], model["id"], r.output, r.reasoning or None, s.score, s.passed,
         s.rationale, r.latency_ms, r.ttft_ms, r.tokens_in, r.tokens_out, r.reasoning_tokens,
-        r.tokens_per_sec, r.cost_usd, error, attempts,
+        r.tokens_per_sec, r.cost_usd, error, attempts, s.processed,
     )
 
 
@@ -160,13 +160,13 @@ async def _run_batch(run_id: int, run, model, batch_no: int, chunk, params, sem:
         rows.append((
             run_id, inp["id"], model["id"], out, (r.reasoning or None) if k == 0 else None, s.score, s.passed,
             s.rationale, r.latency_ms / n, None, tok_in[k], tok_out[k], tok_reason[k], r.tokens_per_sec,
-            cost, error, attempts, batch_no,
+            cost, error, attempts, batch_no, s.processed,
         ))
     await db.pool().executemany(
         """insert into results (run_id, input_id, model_id, output, reasoning, score, passed,
                judge_rationale, latency_ms, ttft_ms, tokens_in, tokens_out, reasoning_tokens,
-               tokens_per_sec, cost_usd, error, attempts, batch_no)
-           values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)""",
+               tokens_per_sec, cost_usd, error, attempts, batch_no, processed_output)
+           values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)""",
         rows,
     )
 

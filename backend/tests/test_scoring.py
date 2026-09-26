@@ -62,3 +62,25 @@ def test_json_fields_invalid_and_schema():
     schema = {"type": "object", "required": ["summary"]}
     r = s("json_fields", {"schema": schema}, EXPECTED, '{"category": "billing"}')
     assert r.score == 0 and "schema" in r.rationale
+
+
+def test_output_processing_json_field_then_exact():
+    import asyncio
+
+    from app.scoring import score
+    cfg = {"extract": {"type": "json_field", "path": "answer.city"}}
+    r = asyncio.run(score("exact", cfg, "", "Paris", 'Sure: {"answer": {"city": "Paris"}}'))
+    assert r.passed and r.processed == "Paris"
+    r = asyncio.run(score("exact", cfg, "", "Paris", "Paris"))
+    assert not r.passed and "not valid JSON" in r.rationale
+
+
+def test_output_processing_regex_group():
+    import asyncio
+
+    from app.scoring import score
+    cfg = {"extract": {"type": "regex", "pattern": r"final answer:\s*(\w+)"}}
+    r = asyncio.run(score("exact", cfg, "", "B", "Reasoning...\nFinal answer: B"))
+    assert r.passed and r.processed == "B"
+    r = asyncio.run(score("exact", cfg, "", "B", "no marker"))
+    assert not r.passed and "did not match" in r.rationale
