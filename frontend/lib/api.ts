@@ -128,7 +128,46 @@ export type ChatMessage = {
   created_at?: string;
 };
 
-export class ApiError extends Error {}
+export type Role = "owner" | "admin";
+
+export type Me = {
+  user: { id: number; name: string; email: string };
+  org: { id: number; name: string } | null;
+  role: Role | null;
+  orgs: { id: number; name: string; role: Role }[];
+};
+
+export type OrgDetails = {
+  id: number;
+  name: string;
+  role: Role;
+  members: { id: number; name: string; email: string; role: Role; created_at: string }[];
+  invitations: { id: number; email: string; role: Role; created_at: string; expires_at: string }[];
+};
+
+export type SavedQuery = { id: number; name: string; sql: string; created_by?: string | null; updated_at: string };
+
+export type RunConfig = {
+  benchmark_id: number;
+  name: string;
+  description: string | null;
+  system_prompt: string | null;
+  prompt_template: string;
+  scoring_method: ScoringMethod;
+  scoring_config: Record<string, unknown>;
+  params: { max_tokens: number; temperature: number; concurrency: number };
+  cases: { input: string; expected: string | null }[];
+  model_ids: number[];
+};
+
+export class ApiError extends Error {
+  constructor(message: string, public status: number) {
+    super(message);
+  }
+}
+
+/** Fired on any 401 so the auth provider can send the user to /login. */
+export const UNAUTHORIZED_EVENT = "bm:unauthorized";
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`/api${path}`, {
@@ -141,14 +180,44 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       const body = await res.json();
       detail = typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail ?? body);
     } catch {}
-    throw new ApiError(detail);
+    if (res.status === 401 && typeof window !== "undefined") window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
+    throw new ApiError(detail, res.status);
   }
   return res.json();
 }
 
 const post = <T>(path: string, body: unknown) => request<T>(path, { method: "POST", body: JSON.stringify(body) });
+const put = <T>(path: string, body: unknown) => request<T>(path, { method: "PUT", body: JSON.stringify(body) });
+const patch = <T>(path: string, body: unknown) => request<T>(path, { method: "PATCH", body: JSON.stringify(body) });
+const del = <T>(path: string) => request<T>(path, { method: "DELETE" });
 
 export const api = {
+  me: () => request<Me>("/auth/me"),
+  signup: (body: { name: string; email: string; password: string; org_name?: string; invite_token?: string }) => post<Me>("/auth/signup", body),
+  login: (body: { email: string; password: string }) => post<Me>("/auth/login", body),
+  logout: () => post<{ ok: boolean }>("/auth/logout", {}),
+  switchOrg: (org_id: number) => post<Me>("/auth/switch-org", { org_id }),
+  createOrg: (name: string) => post<Me>("/orgs", { name }),
+
+  org: () => request<OrgDetails>("/org"),
+  renameOrg: (name: string) => patch<{ ok: boolean }>("/org", { name }),
+  invite: (email: string, role: Role) => post<{ id: number; token: string; url: string }>("/org/invitations", { email, role }),
+  revokeInvite: (id: number) => del<{ ok: boolean }>(`/org/invitations/${id}`),
+  setRole: (userId: number, role: Role) => patch<{ ok: boolean }>(`/org/members/${userId}`, { role }),
+  removeMember: (userId: number) => del<{ ok: boolean }>(`/org/members/${userId}`),
+  invitation: (token: string) => request<{ org_name: string; email: string; role: Role }>(`/invitations/${token}`),
+  acceptInvite: (token: string) => post<Me>(`/invitations/${token}/accept`, {}),
+
+  memories: () => request<{ id: string; content: string; created_at: string | null }[]>("/memory"),
+  forget: (id: string) => del<{ ok: boolean }>(`/memory/${id}`),
+
+  savedQueries: () => request<SavedQuery[]>("/saved-queries"),
+  saveQuery: (name: string, sql: string) => post<SavedQuery>("/saved-queries", { name, sql }),
+  updateQuery: (id: number, name: string, sql: string) => put<SavedQuery>(`/saved-queries/${id}`, { name, sql }),
+  deleteQuery: (id: number) => del<{ ok: boolean }>(`/saved-queries/${id}`),
+
+  runConfig: (id: number | string) => request<RunConfig>(`/runs/${id}/config`),
+
   models: () => request<Model[]>("/models"),
   syncModels: () => request<{ synced: number }>("/models/sync", { method: "POST" }),
   addModel: (body: {
@@ -208,7 +277,7 @@ export const api = {
   /** MP3 for the given text, as an object URL (caller revokes). */
   tts: async (text: string) => {
     const res = await fetch("/api/tts", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text }) });
-    if (!res.ok) throw new ApiError(`text-to-speech failed (${res.status})`);
+    if (!res.ok) throw new ApiError(`text-to-speech failed (${res.status})`, res.status);
     return URL.createObjectURL(await res.blob());
   },
 };
