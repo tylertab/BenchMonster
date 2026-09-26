@@ -153,7 +153,7 @@ export default function DatasetPage() {
       </Card>
 
       <Card title="Runs using this file">
-        {runs === null ? <Empty>Loading…</Empty> : runs.length === 0 ? <Empty>Not used yet.</Empty> : <RunsTable runs={runs} compact />}
+        {runs === null ? <Empty>Loading…</Empty> : runs.length === 0 ? <Empty>Not used yet.</Empty> : <RunsTable runs={runs} />}
       </Card>
     </div>
   );

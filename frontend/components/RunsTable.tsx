@@ -4,11 +4,10 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type { RunListItem } from "@/lib/api";
 import { pct, usd, when } from "@/lib/format";
-import { TemplateView } from "./TemplateView";
 import { StatusBadge } from "./ui";
 
-/** Runs with their profile, prompt, models, headline metrics, and who ran them when. */
-export function RunsTable({ runs, compact = false }: { runs: RunListItem[]; compact?: boolean }) {
+/** Runs with their profile version, headline metrics, and who ran them when (prompt/models live on the profile). */
+export function RunsTable({ runs }: { runs: RunListItem[] }) {
   const router = useRouter();
   return (
     <div className="overflow-x-auto">
@@ -17,8 +16,6 @@ export function RunsTable({ runs, compact = false }: { runs: RunListItem[]; comp
           <tr>
             <th className="pb-2 font-medium">Run ID</th>
             <th className="pb-2 font-medium">Profile</th>
-            <th className="pb-2 font-medium">Prompt</th>
-            <th className="pb-2 font-medium">Models</th>
             <th className="whitespace-nowrap pb-2 pl-3 text-right font-medium">Best acc.</th>
             <th className="pb-2 pl-3 text-right font-medium">Cost</th>
             <th className="pb-2 pl-4 font-medium">Run by</th>
@@ -62,18 +59,6 @@ export function RunsTable({ runs, compact = false }: { runs: RunListItem[]; comp
                   ) : (
                     <span className="text-muted">–</span>
                   )}
-                </td>
-                <td className="max-w-xs py-2.5 pr-3">
-                  <div className="font-medium">{r.prompt_name}</div>
-                  {!compact && (
-                    <div className="mt-1 text-ink-2">
-                      <TemplateView template={r.template} clamp />
-                    </div>
-                  )}
-                </td>
-                <td className="max-w-[12rem] py-2.5 pr-3 text-xs text-ink-2">
-                  {r.models.slice(0, 3).join(", ")}
-                  {r.models.length > 3 && <span className="text-muted"> +{r.models.length - 3}</span>}
                 </td>
                 <td className="tabular whitespace-nowrap py-2.5 pl-3 text-right">{pct(r.best_accuracy, 1)}</td>
                 <td className="tabular whitespace-nowrap py-2.5 pl-3 text-right">{usd(r.total_cost_usd)}</td>
