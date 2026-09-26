@@ -9,8 +9,9 @@ Writes to frontend/public/brand/ and frontend/app/ (favicon/app icons):
   tagline.png          "LLM BENCHMARKING PLATFORM"
   app/icon.png, app/apple-icon.png   square icon for the browser tab / home screen
 
-Only background connected to the crop's border is removed, so white areas
-inside the artwork (the monster's eyes) stay opaque. Anti-aliased edges get
+For the monster, only background connected to the crop's border is removed, so
+white areas inside the artwork (its eyes) stay opaque; for text, every
+background pixel goes, including letter counters (b, e, o). Anti-aliased edges get
 partial alpha via color-to-alpha against the estimated background color.
 """
 
@@ -48,7 +49,13 @@ def bands(mask: np.ndarray, min_gap: int = 12, min_pixels: int = 4) -> list[tupl
     return out
 
 
-def cut(img: np.ndarray, bg: np.ndarray, top: int, bottom: int, pad: int = 6) -> Image.Image:
+def cut(img: np.ndarray, bg: np.ndarray, top: int, bottom: int, pad: int = 6, holes: bool = False) -> Image.Image:
+    """Crop a band and make its background transparent.
+
+    holes=False: only background connected to the border is removed (keeps white
+    areas inside artwork, like the monster's eyes). holes=True: every
+    background-colored pixel is removed, so letter counters (b, e, o) go clear.
+    """
     dist_all = np.linalg.norm(img - bg, axis=2)
     cols = np.where((dist_all[top:bottom + 1] > FG_DIST).sum(axis=0) > 0)[0]
     y0, y1 = max(top - pad, 0), min(bottom + pad + 1, img.shape[0])
@@ -57,9 +64,12 @@ def cut(img: np.ndarray, bg: np.ndarray, top: int, bottom: int, pad: int = 6) ->
     dist = dist_all[y0:y1, x0:x1]
 
     # Background = background-colored pixels connected to the crop's border.
-    labels, _ = ndimage.label(dist < BG_DIST)
-    edge = set(np.unique(np.concatenate([labels[0], labels[-1], labels[:, 0], labels[:, -1]]))) - {0}
-    background = np.isin(labels, list(edge))
+    if holes:
+        background = dist < BG_DIST
+    else:
+        labels, _ = ndimage.label(dist < BG_DIST)
+        edge = set(np.unique(np.concatenate([labels[0], labels[-1], labels[:, 0], labels[:, -1]]))) - {0}
+        background = np.isin(labels, list(edge))
     fringe = ndimage.binary_dilation(background, iterations=3) & ~background
 
     # Color-to-alpha on the fringe: how far each channel is pushed from the background.
@@ -107,8 +117,8 @@ def main() -> None:
 
     OUT.mkdir(parents=True, exist_ok=True)
     icon = cut(img, bg, it, ib)
-    wordmark = cut(img, bg, wt, wb)
-    tagline = cut(img, bg, tt, tb)
+    wordmark = cut(img, bg, wt, wb, holes=True)
+    tagline = cut(img, bg, tt, tb, holes=True)
 
     def save(im: Image.Image, name: str, max_w: int) -> None:
         if im.width > max_w:
