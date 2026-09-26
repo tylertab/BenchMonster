@@ -4,9 +4,9 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from . import db
+from . import db, runner
 from .config import settings
-from .routers import models
+from .routers import benchmarks, models, runs
 
 log = logging.getLogger("uvicorn.error")
 
@@ -14,6 +14,7 @@ log = logging.getLogger("uvicorn.error")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await db.connect()
+    await runner.fail_orphaned_runs()
     try:
         log.info("synced %d Vultr models", await models.sync_vultr_models())
     except Exception:
@@ -30,6 +31,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.include_router(models.router)
+app.include_router(benchmarks.router)
+app.include_router(runs.router)
 
 
 @app.get("/api/health")
