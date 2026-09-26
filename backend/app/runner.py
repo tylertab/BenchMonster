@@ -18,7 +18,7 @@ import logging
 import random
 from decimal import Decimal
 
-from . import db, providers, scoring
+from . import db, exports, providers, scoring
 
 log = logging.getLogger("uvicorn.error")
 
@@ -198,6 +198,7 @@ async def execute(run_id: int) -> None:
         await asyncio.gather(*jobs)
 
         await pool.execute("update runs set status = 'completed', finished_at = now() where id = $1", run_id)
+        await exports.auto_export(run_id)
     except Exception as e:
         log.exception("run %s failed", run_id)
         await pool.execute(

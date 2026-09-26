@@ -414,25 +414,33 @@ async def pg_read(cfg: PgConfig, sec: PgSecret, *, table: str | None = None, que
     return columns, [{c: _cell(r[i]) for i, c in enumerate(columns)} for r in records]
 
 
-async def pg_write(cfg: PgConfig, sec: PgSecret, table: str, columns: dict[str, str], rows: list[tuple]) -> int:
-    """Create `schema.table` if needed ({column: sql type}) and insert rows. Returns rows written."""
+async def pg_write(cfg: PgConfig, sec: PgSecret, writes: list[tuple[str, dict[str, str], list[tuple]]],
+                   replace_run_id: int | None = None) -> int:
+    """For each (table, {column: sql type}, rows): create schema.table if needed and insert the rows,
+    all in one transaction. With replace_run_id, that run's earlier rows are deleted first
+    (so exporting a run twice doesn't duplicate it). Returns rows written."""
     conn = await pg_connect(cfg, sec)
-    target = f"{_ident(cfg.schema_)}.{_ident(table)}"
+    written = 0
     try:
         async with conn.transaction():
             await conn.execute(f"set local statement_timeout = '{PG_TIMEOUT_S * 4}s'")
-            await conn.execute(
-                f"create table if not exists {target} ({', '.join(f'{_ident(c)} {t}' for c, t in columns.items())})"
-            )
-            await conn.executemany(
-                f"insert into {target} ({', '.join(_ident(c) for c in columns)}) values ({', '.join(f'${i + 1}' for i in range(len(columns)))})",
-                rows,
-            )
+            for table, columns, rows in writes:
+                target = f"{_ident(cfg.schema_)}.{_ident(table)}"
+                await conn.execute(
+                    f"create table if not exists {target} ({', '.join(f'{_ident(c)} {t}' for c, t in columns.items())})"
+                )
+                if replace_run_id is not None:
+                    await conn.execute(f"delete from {target} where run_id = $1", replace_run_id)
+                placeholders = ", ".join(f"${i + 1}::{t}" for i, t in enumerate(columns.values()))
+                await conn.executemany(
+                    f"insert into {target} ({', '.join(_ident(c) for c in columns)}) values ({placeholders})", rows
+                )
+                written += len(rows)
     except asyncpg.PostgresError as e:
-        raise ConnectionError_(f"writing to {cfg.schema_}.{table} failed: {e}")
+        raise ConnectionError_(f"writing to schema {cfg.schema_} failed: {e}")
     finally:
         await conn.close()
-    return len(rows)
+    return written
 
 
 # --- dispatch ----------------------------------------------------------------------

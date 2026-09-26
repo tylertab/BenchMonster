@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useState } from "react";
 import { ProfileConfigView } from "@/components/ProfileConfigView";
+import { ProfileAutoExport } from "@/components/RunExports";
 import { RunLauncher } from "@/components/RunLauncher";
 import { Button, Card, Empty, ErrorNote } from "@/components/ui";
 import { api, type Profile, type ProfileSection, type ProfileVersion } from "@/lib/api";
@@ -124,47 +125,50 @@ function ProfileView() {
       <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_300px]">
         {v ? <ProfileConfigView v={v} /> : <Empty>Loading version…</Empty>}
 
-        <Card title="Version history">
-          <ol className="space-y-1">
-            {profile.versions.map((ver) => {
-              const selected = ver.version === (v?.version ?? requested);
-              return (
-                <li key={ver.version}>
-                  <button
-                    type="button"
-                    onClick={() => showVersion(ver.version)}
-                    className={`w-full rounded-md px-2 py-1.5 text-left text-sm ${selected ? "bg-accent/10" : "hover:bg-surface-2"}`}
-                  >
-                    <div className="flex items-center gap-2">
-                      <span className={`font-medium ${selected ? "text-accent" : ""}`}>v{ver.version}</span>
-                      {ver.version === profile.current_version && <span className="rounded bg-good/10 px-1.5 text-xs text-good-ink">current</span>}
-                      <span className="ml-auto text-xs text-muted">
-                        {ver.run_count} run{ver.run_count === 1 ? "" : "s"}
-                      </span>
-                    </div>
-                    {ver.note && <div className="truncate text-xs text-ink-2">{ver.note}</div>}
-                    <div className="mt-0.5 flex flex-wrap items-center gap-1 text-xs text-muted">
-                      {ver.changed.map((c) => (
-                        <span key={c} className="rounded bg-surface-2 px-1">
-                          {SECTION_LABEL[c]}
+        <div className="space-y-6">
+          <Card title="Version history">
+            <ol className="space-y-1">
+              {profile.versions.map((ver) => {
+                const selected = ver.version === (v?.version ?? requested);
+                return (
+                  <li key={ver.version}>
+                    <button
+                      type="button"
+                      onClick={() => showVersion(ver.version)}
+                      className={`w-full rounded-md px-2 py-1.5 text-left text-sm ${selected ? "bg-accent/10" : "hover:bg-surface-2"}`}
+                    >
+                      <div className="flex items-center gap-2">
+                        <span className={`font-medium ${selected ? "text-accent" : ""}`}>v{ver.version}</span>
+                        {ver.version === profile.current_version && <span className="rounded bg-good/10 px-1.5 text-xs text-good-ink">current</span>}
+                        <span className="ml-auto text-xs text-muted">
+                          {ver.run_count} run{ver.run_count === 1 ? "" : "s"}
                         </span>
-                      ))}
-                      <span>
-                        {when(ver.created_at)}
-                        {ver.created_by ? ` · ${ver.created_by}` : ""}
-                      </span>
-                    </div>
-                  </button>
-                </li>
-              );
-            })}
-          </ol>
-          <div className="mt-3 border-t border-line pt-3">
-            <Button variant="ghost" onClick={remove} className="text-critical">
-              Delete profile
-            </Button>
-          </div>
-        </Card>
+                      </div>
+                      {ver.note && <div className="truncate text-xs text-ink-2">{ver.note}</div>}
+                      <div className="mt-0.5 flex flex-wrap items-center gap-1 text-xs text-muted">
+                        {ver.changed.map((c) => (
+                          <span key={c} className="rounded bg-surface-2 px-1">
+                            {SECTION_LABEL[c]}
+                          </span>
+                        ))}
+                        <span>
+                          {when(ver.created_at)}
+                          {ver.created_by ? ` · ${ver.created_by}` : ""}
+                        </span>
+                      </div>
+                    </button>
+                  </li>
+                );
+              })}
+            </ol>
+            <div className="mt-3 border-t border-line pt-3">
+              <Button variant="ghost" onClick={remove} className="text-critical">
+                Delete profile
+              </Button>
+            </div>
+          </Card>
+          <ProfileAutoExport profileId={profile.id} connectionId={profile.export_connection_id} target={profile.export_target} />
+        </div>
       </div>
     </div>
   );

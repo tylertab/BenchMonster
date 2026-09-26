@@ -304,7 +304,22 @@ export type Profile = {
   updated_at: string;
   created_by: string | null;
   current: ProfileVersion;
+  export_connection_id: number | null;
+  export_target: string | null;
   versions: { version: number; note: string | null; created_at: string; created_by: string | null; run_count: number; changed: ProfileSection[] }[];
+};
+
+export type RunExport = {
+  id: number;
+  connection_id: number | null;
+  connection_name: string;
+  target: string;
+  status: "ok" | "failed";
+  detail: string | null;
+  rows: number | null;
+  automatic: boolean;
+  created_at: string;
+  created_by: string | null;
 };
 
 export type ProfileListItem = {
@@ -530,6 +545,12 @@ export const api = {
   restoreVersion: (id: number, version: number) => post<{ version: number }>(`/profiles/${id}/versions/${version}/restore`, {}),
   runProfile: (id: number, body: { version?: number; name?: string; output_name?: string } = {}) =>
     post<{ id: number; version: number }>(`/profiles/${id}/runs`, body),
+
+  setProfileExport: (id: number, body: { connection_id: number | null; target?: string | null }) =>
+    put<{ export_connection_id: number | null; export_target: string | null }>(`/profiles/${id}/export`, body),
+  exportRun: (id: number, body: { connection_id: number; target?: string | null }) =>
+    post<{ id: number; target: string; detail: string; rows: number }>(`/runs/${id}/exports`, body),
+  runExports: (id: number) => request<RunExport[]>(`/runs/${id}/exports`),
 
   runs: (query: RunListQuery = {}) => request<{ total: number; items: RunListItem[] }>(`/runs${qs(query)}`),
   run: (id: number | string) => request<Run>(`/runs/${id}`),

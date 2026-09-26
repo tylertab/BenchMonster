@@ -4,8 +4,9 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field
 
-from .. import auth, db, runconfig, templates
+from .. import auth, db, exports, runconfig, templates
 
 router = APIRouter(prefix="/api/runs", tags=["runs"])
 
@@ -219,6 +220,30 @@ async def latency_distribution(run_id: int, ctx: auth.Ctx = Depends(auth.current
         """select m.display_name as model, res.latency_ms, res.ttft_ms, res.score, res.cost_usd
            from results res join models m on m.id = res.model_id
            where res.run_id = $1 and res.error is null""",
+        run_id,
+    )
+    return [dict(r) for r in rows]
+
+
+class ExportIn(BaseModel):
+    connection_id: int
+    target: str | None = Field(None, max_length=300)  # bucket folder, or Postgres table prefix
+
+
+@router.post("/{run_id}/exports")
+async def export_run(run_id: int, body: ExportIn, ctx: auth.Ctx = Depends(auth.current_ctx)):
+    """Copy the run's results to a connection that allows writes."""
+    return await exports.export_run(ctx.org_id, run_id, body.connection_id, body.target, user_id=ctx.user_id)
+
+
+@router.get("/{run_id}/exports")
+async def list_exports(run_id: int, ctx: auth.Ctx = Depends(auth.current_ctx)):
+    await auth.run_in_org(run_id, ctx.org_id)
+    rows = await db.pool().fetch(
+        """select e.id, e.connection_id, e.connection_name, e.target, e.status, e.detail, e.rows, e.automatic,
+                  e.created_at, u.name as created_by
+           from run_exports e left join users u on u.id = e.created_by
+           where e.run_id = $1 order by e.created_at desc""",
         run_id,
     )
     return [dict(r) for r in rows]

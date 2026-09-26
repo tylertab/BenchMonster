@@ -5,6 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { HBarChart, ProgressBar, ScatterChart, StatTile } from "@/components/charts";
 import { ResultsExplorer } from "@/components/ResultsExplorer";
+import { RunExports } from "@/components/RunExports";
 import { RunMetadata } from "@/components/RunMetadata";
 import { Card, Empty, ErrorNote, StatusBadge } from "@/components/ui";
 import { api, type ModelSummary, type Run } from "@/lib/api";
@@ -212,6 +213,8 @@ export default function RunPage() {
       )}
 
       <ResultsExplorer runId={run.id} models={run.models} refreshKey={done} />
+
+      <RunExports runId={run.id} finished={run.status === "completed" || run.status === "failed"} />
     </div>
   );
 }

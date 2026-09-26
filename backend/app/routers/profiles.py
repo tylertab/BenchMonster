@@ -196,6 +196,7 @@ async def get_profile(profile_id: int, ctx: auth.Ctx = Depends(auth.current_ctx)
         "id": p["id"], "name": p["name"], "description": p["description"],
         "current_version": p["current_version"], "created_at": p["created_at"], "updated_at": p["updated_at"],
         "created_by": p["created_by_name"],
+        "export_connection_id": p["export_connection_id"], "export_target": p["export_target"],
         "current": await _version(profile_id, p["current_version"]),
         "versions": versions,
     }
@@ -306,3 +307,29 @@ async def run_profile(profile_id: int, body: ProfileRunIn, ctx: auth.Ctx = Depen
         profile_id=profile_id, profile_version=version, label=f"{p['name']} v{version}",
     )
     return {"id": run_id, "version": version}
+
+
+class ExportSettingsIn(BaseModel):
+    connection_id: int | None = None  # None = don't export automatically
+    target: str | None = Field(None, max_length=300)
+
+
+@router.put("/{profile_id}/export")
+async def set_auto_export(profile_id: int, body: ExportSettingsIn, ctx: auth.Ctx = Depends(auth.current_ctx)):
+    """Export every finished run of this profile to a connection (or stop)."""
+    await _profile(profile_id, ctx.org_id)
+    if body.connection_id is not None:
+        c = await db.pool().fetchrow(
+            "select allow_write, access from connections where id = $1 and org_id = $2", body.connection_id, ctx.org_id
+        )
+        if c is None:
+            raise HTTPException(404, "connection not found")
+        if not c["allow_write"]:
+            raise HTTPException(400, "that connection is read-only; edit it to allow writes")
+        if (c["access"] or {}).get("write") is False:
+            raise HTTPException(400, "that connection's credentials can't write (see its last access check)")
+    await db.pool().execute(
+        "update benchmark_profiles set export_connection_id = $2, export_target = $3 where id = $1",
+        profile_id, body.connection_id, ((body.target or "").strip() or None) if body.connection_id else None,
+    )
+    return {"export_connection_id": body.connection_id, "export_target": (body.target or "").strip() or None}
