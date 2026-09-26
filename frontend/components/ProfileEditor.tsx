@@ -21,7 +21,7 @@ import {
 } from "@/lib/api";
 import { renderTemplate, templateVariables } from "@/lib/template";
 
-export type ProfileDraft = { name: string; description: string; config: ProfileConfig; note: string };
+export type ProfileDraft = { name: string; description: string; config: ProfileConfig };
 
 /** Where a prompt variable's value comes from. */
 type VarSource = "field" | "record" | "dataset" | "text";
@@ -132,7 +132,6 @@ export function ProfileEditor({
   const [runParams, setRunParams] = useState<RunParams>(
     initial ? { max_tokens: initial.config.max_tokens, temperature: initial.config.temperature, concurrency: initial.config.concurrency } : DEFAULT_PARAMS,
   );
-  const [note, setNote] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -258,7 +257,6 @@ export function ProfileEditor({
       await onSubmit({
         name: name.trim(),
         description: description.trim(),
-        note: note.trim(),
         config: {
           prompt_name: promptName.trim(),
           system_prompt: systemPrompt.trim() || null,
@@ -581,14 +579,6 @@ export function ProfileEditor({
       <Section n={5} title="Models">
         <ModelPicker selected={modelIds} onChange={setModelIds} params={runParams} onParamsChange={setRunParams} />
       </Section>
-
-      {mode === "edit" && (
-        <Card>
-          <Field label="What changed?" hint={`Saved as version ${(initial?.currentVersion ?? 0) + 1}. Earlier versions and their runs stay as they are.`}>
-            <input className={inputClass} value={note} onChange={(e) => setNote(e.target.value)} placeholder="Catalog inlined as CSV; question per record" />
-          </Field>
-        </Card>
-      )}
 
       <ErrorNote error={error} />
       <div className="flex flex-wrap items-center justify-end gap-3">

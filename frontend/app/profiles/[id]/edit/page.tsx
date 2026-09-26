@@ -37,7 +37,7 @@ export default function EditProfilePage() {
           const metaChanged = d.name !== profile.name || (d.description || null) !== (profile.description || null);
           if (metaChanged) await api.updateProfileMeta(profile.id, { name: d.name, description: d.description || null });
           try {
-            await api.saveVersion(profile.id, d.config, d.note || undefined);
+            await api.saveVersion(profile.id, d.config);
           } catch (e) {
             // Renaming alone doesn't create a version.
             if (!(metaChanged && e instanceof ApiError && e.status === 400 && e.message.startsWith("nothing changed"))) throw e;
