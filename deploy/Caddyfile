@@ -1,0 +1,17 @@
+{$APP_DOMAIN}, www.{$APP_DOMAIN} {
+	encode zstd gzip
+
+	# API straight to FastAPI (long assistant turns, streamed TTS audio).
+	handle /api/* {
+		reverse_proxy backend:8000 {
+			flush_interval -1
+			transport http {
+				read_timeout 5m
+			}
+		}
+	}
+
+	handle {
+		reverse_proxy frontend:3000
+	}
+}

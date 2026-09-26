@@ -1,0 +1,31 @@
+services:
+  backend:
+    build: ../backend
+    env_file: ../.env
+    environment:
+      CORS_ORIGINS: '["https://${APP_DOMAIN}"]'
+    restart: unless-stopped
+
+  frontend:
+    build: ../frontend
+    depends_on: [backend]
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2-alpine
+    depends_on: [frontend, backend]
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      APP_DOMAIN: ${APP_DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    restart: unless-stopped
+
+volumes:
+  caddy_data:
+  caddy_config:
