@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { HBarChart, ProgressBar, ScatterChart, StatTile } from "@/components/charts";
 import { ResultsExplorer } from "@/components/ResultsExplorer";
@@ -22,6 +22,7 @@ function best(rows: ModelSummary[], key: (r: ModelSummary) => number | null, dir
 
 export default function RunPage() {
   const { id } = useParams<{ id: string }>();
+  const router = useRouter();
   const [run, setRun] = useState<Run | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -65,9 +66,16 @@ export default function RunPage() {
     <div className="space-y-6">
       <div className="flex flex-wrap items-end gap-4">
         <div>
-          <Link href="/" className="text-sm text-ink-2 hover:text-ink">
-            ← Runs
-          </Link>
+          {run.profile_id ? (
+            <Link href={`/profiles/${run.profile_id}?version=${run.profile_version}`} className="text-sm text-ink-2 hover:text-ink">
+              ← {run.profile_name} · v{run.profile_version}
+              {run.profile_version !== run.profile_current_version && <span className="text-muted"> (current is v{run.profile_current_version})</span>}
+            </Link>
+          ) : (
+            <Link href="/runs" className="text-sm text-ink-2 hover:text-ink">
+              ← Runs
+            </Link>
+          )}
           <h1 className="mt-1 flex items-center gap-3 text-2xl font-semibold tracking-tight">
             Run ID {run.id}
             {run.name && <span className="font-normal text-ink-2">{run.name}</span>}
@@ -80,13 +88,28 @@ export default function RunPage() {
           </p>
         </div>
         <div className="ml-auto flex flex-wrap items-center gap-2">
-          <Link
-            href={`/runs/new?from=${run.id}`}
-            className="rounded-md border border-line bg-surface px-3 py-2 text-sm font-medium hover:bg-surface-2"
-            title="Start a new run from this run's prompt, input files, scoring, and models"
-          >
-            ⧉ Clone & edit
-          </Link>
+          {run.profile_id && (
+            <>
+              <Link
+                href={`/profiles/${run.profile_id}/edit`}
+                className="rounded-md border border-line bg-surface px-3 py-2 text-sm font-medium hover:bg-surface-2"
+                title="Change the profile's prompt, inputs, scoring, or models (saves a new version)"
+              >
+                Edit profile
+              </Link>
+              <button
+                type="button"
+                onClick={async () => {
+                  const r = await api.runProfile(run.profile_id!, { version: run.profile_version! });
+                  router.push(`/runs/${r.id}`);
+                }}
+                className="rounded-md border border-line bg-surface px-3 py-2 text-sm font-medium hover:bg-surface-2"
+                title={`Run profile v${run.profile_version} again`}
+              >
+                ↻ Run v{run.profile_version} again
+              </button>
+            </>
+          )}
           <Link href={`/runs/${run.id}/review`} className="rounded-md bg-accent px-4 py-2 text-sm font-medium text-white hover:opacity-90">
             Review with SQL & AI →
           </Link>

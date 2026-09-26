@@ -47,6 +47,9 @@ export type DatasetDetail = Dataset & { rows: ({ idx: number } & Record<string, 
 export type RunListItem = {
   id: number;
   name: string | null;
+  profile_id: number | null;
+  profile_version: number | null;
+  profile_name: string | null;
   status: RunStatus;
   prompt_id: number | null;
   prompt_name: string;
@@ -69,6 +72,8 @@ export type RunListQuery = {
   q?: string;
   status?: string;
   prompt_id?: number;
+  profile_id?: number;
+  version?: number;
   dataset_id?: number;
   model_id?: number;
   sort?: "newest" | "oldest";
@@ -109,6 +114,10 @@ export type RunDataset = {
 export type Run = {
   id: number;
   name: string | null;
+  profile_id: number | null;
+  profile_version: number | null;
+  profile_name: string | null;
+  profile_current_version: number | null;
   prompt_id: number | null;
   prompt_name: string;
   template: string;
@@ -130,33 +139,82 @@ export type Run = {
   summary: ModelSummary[];
 };
 
-export type RunConfig = {
-  name: string | null;
-  prompt_id: number | null;
+export type DatasetRef = { dataset_id: number; mapping: Record<string, string>; expected_column: string | null };
+
+/** Everything a benchmark profile version stores (and a run needs). */
+export type ProfileConfig = {
   prompt_name: string;
-  template: string;
   system_prompt: string | null;
-  current_template: string | null;
-  current_system_prompt: string | null;
+  template: string;
+  datasets: DatasetRef[];
   scoring_method: ScoringMethod;
   scoring_config: Record<string, unknown>;
-  params: RunParams;
-  output_name: string;
-  datasets: RunDataset[];
   model_ids: number[];
+} & RunParams;
+
+export type ProfileVersion = {
+  version: number;
+  prompt_name: string;
+  system_prompt: string | null;
+  template: string;
+  variables: string[];
+  scoring_method: ScoringMethod;
+  scoring_config: Record<string, unknown>;
+  model_ids: number[];
+  params: RunParams;
+  note: string | null;
+  created_at: string;
+  created_by_name: string | null;
+  datasets: (RunDataset & { row_count: number | null; columns: string[] | null; available: boolean })[];
+  models: { id: number; display_name: string; model_id: string; active: boolean }[];
 };
 
-export type NewRun = {
-  name?: string;
-  prompt_id: number;
-  template?: string;
-  system_prompt?: string;
-  datasets: { dataset_id: number; mapping: Record<string, string>; expected_column: string | null }[];
+export type ProfileSection = "prompt" | "inputs" | "scoring" | "models" | "params";
+
+export type Profile = {
+  id: number;
+  name: string;
+  description: string | null;
+  current_version: number;
+  created_at: string;
+  updated_at: string;
+  created_by: string | null;
+  current: ProfileVersion;
+  versions: { version: number; note: string | null; created_at: string; created_by: string | null; run_count: number; changed: ProfileSection[] }[];
+};
+
+export type ProfileListItem = {
+  id: number;
+  name: string;
+  description: string | null;
+  current_version: number;
+  created_at: string;
+  updated_at: string;
+  created_by: string | null;
+  run_count: number;
+  last_run_at: string | null;
+  prompt_name: string;
   scoring_method: ScoringMethod;
-  scoring_config: Record<string, unknown>;
-  model_ids: number[];
-  output_name?: string;
-} & RunParams;
+  input_files: string[];
+  model_count: number;
+  current_best_accuracy: number | null;
+};
+
+/** Turn a stored version back into an editable config. */
+export function versionToConfig(v: ProfileVersion): ProfileConfig {
+  return {
+    prompt_name: v.prompt_name,
+    system_prompt: v.system_prompt,
+    template: v.template,
+    datasets: v.datasets.filter((d) => d.dataset_id).map((d) => ({ dataset_id: d.dataset_id!, mapping: d.mapping, expected_column: d.expected_column })),
+    scoring_method: v.scoring_method,
+    scoring_config: v.scoring_config,
+    model_ids: v.model_ids,
+    max_tokens: v.params.max_tokens ?? 4096,
+    temperature: v.params.temperature ?? 0,
+    concurrency: v.params.concurrency ?? 8,
+  };
+}
 
 export type Result = {
   id: number;
@@ -307,10 +365,20 @@ export const api = {
   },
   deleteDataset: (id: number) => del<{ ok: boolean }>(`/datasets/${id}`),
 
+  profiles: () => request<ProfileListItem[]>("/profiles"),
+  profile: (id: number | string) => request<Profile>(`/profiles/${id}`),
+  profileVersion: (id: number | string, version: number) => request<ProfileVersion>(`/profiles/${id}/versions/${version}`),
+  createProfile: (body: { name: string; description?: string; config: ProfileConfig; note?: string }) => post<Profile>("/profiles", body),
+  updateProfileMeta: (id: number, body: { name: string; description?: string | null }) => patch<{ ok: boolean }>(`/profiles/${id}`, body),
+  deleteProfile: (id: number) => del<{ ok: boolean }>(`/profiles/${id}`),
+  saveVersion: (id: number, config: ProfileConfig, note?: string) =>
+    post<{ version: number; changed: ProfileSection[] }>(`/profiles/${id}/versions`, { config, note }),
+  restoreVersion: (id: number, version: number) => post<{ version: number }>(`/profiles/${id}/versions/${version}/restore`, {}),
+  runProfile: (id: number, body: { version?: number; name?: string; output_name?: string } = {}) =>
+    post<{ id: number; version: number }>(`/profiles/${id}/runs`, body),
+
   runs: (query: RunListQuery = {}) => request<{ total: number; items: RunListItem[] }>(`/runs${qs(query)}`),
-  createRun: (body: NewRun) => post<{ id: number }>("/runs", body),
   run: (id: number | string) => request<Run>(`/runs/${id}`),
-  runConfig: (id: number | string) => request<RunConfig>(`/runs/${id}/config`),
   deleteRun: (id: number) => del<{ ok: boolean }>(`/runs/${id}`),
   results: (id: number | string, opts: { modelId?: number; onlyFailed?: boolean; limit?: number } = {}) =>
     request<Result[]>(`/runs/${id}/results${qs({ model_id: opts.modelId, only_failed: opts.onlyFailed || undefined, limit: opts.limit ?? 500 })}`),

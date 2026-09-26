@@ -61,6 +61,9 @@ export function Header() {
         {me && (
           <>
             <Link href="/" className="text-sm text-ink-2 hover:text-ink">
+              Profiles
+            </Link>
+            <Link href="/runs" className="text-sm text-ink-2 hover:text-ink">
               Runs
             </Link>
             <Link href="/prompts" className="text-sm text-ink-2 hover:text-ink">
@@ -111,8 +114,8 @@ export function Header() {
                   </>
                 )}
               </Menu>
-              <Link href="/runs/new" className="rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-white hover:opacity-90">
-                New run
+              <Link href="/profiles/new" className="rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-white hover:opacity-90">
+                New profile
               </Link>
             </div>
           </>

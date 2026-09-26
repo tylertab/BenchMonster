@@ -45,8 +45,8 @@ export default function DatasetPage() {
           <Button variant="ghost" onClick={remove}>
             Delete
           </Button>
-          <Link href={`/runs/new?dataset=${ds.id}`} className="rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-white hover:opacity-90">
-            Use in a run →
+          <Link href={`/profiles/new?dataset=${ds.id}`} className="rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-white hover:opacity-90">
+            Use in a new profile →
           </Link>
         </div>
       </div>

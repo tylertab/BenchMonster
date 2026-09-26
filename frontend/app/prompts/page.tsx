@@ -45,9 +45,6 @@ export default function PromptsPage() {
             <Link key={p.id} href={`/prompts/${p.id}`} className="block rounded-lg border border-line bg-surface p-4 hover:border-accent/50">
               <div className="flex items-center gap-2">
                 <span className="font-medium">{p.name}</span>
-                <span className="ml-auto text-xs text-muted">
-                  {p.run_count} run{p.run_count === 1 ? "" : "s"}
-                </span>
               </div>
               <div className="mt-2 rounded-md bg-surface-2/60 p-2 text-ink-2">
                 <TemplateView template={p.template} clamp />

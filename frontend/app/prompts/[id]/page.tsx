@@ -4,20 +4,17 @@ import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { PromptEditor } from "@/components/PromptEditor";
-import { RunsTable } from "@/components/RunsTable";
 import { Button, Card, Empty, ErrorNote } from "@/components/ui";
-import { api, type Prompt, type RunListItem } from "@/lib/api";
+import { api, type Prompt } from "@/lib/api";
 
 export default function PromptPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
   const [prompt, setPrompt] = useState<Prompt | null>(null);
-  const [runs, setRuns] = useState<RunListItem[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     api.prompt(id).then(setPrompt, (e) => setError(e.message));
-    api.runs({ prompt_id: Number(id), limit: 20 }).then((r) => setRuns(r.items));
   }, [id]);
 
   const remove = async () => {
@@ -41,16 +38,13 @@ export default function PromptPage() {
           <Button variant="ghost" onClick={remove}>
             Delete
           </Button>
-          <Link href={`/runs/new?prompt=${prompt.id}`} className="rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-white hover:opacity-90">
-            Run this prompt →
+          <Link href={`/profiles/new?prompt=${prompt.id}`} className="rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-white hover:opacity-90">
+            Use in a new profile →
           </Link>
         </div>
       </div>
       <Card title="Edit">
         <PromptEditor key={prompt.updated_at} prompt={prompt} onSaved={setPrompt} />
-      </Card>
-      <Card title="Runs using this prompt">
-        {runs === null ? <Empty>Loading…</Empty> : runs.length === 0 ? <Empty>Not run yet.</Empty> : <RunsTable runs={runs} compact />}
       </Card>
     </div>
   );

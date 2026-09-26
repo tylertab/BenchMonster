@@ -25,13 +25,14 @@ export function RunsTable({ runs, compact = false }: { runs: RunListItem[]; comp
         <thead className="text-left text-xs text-muted">
           <tr>
             <th className="pb-2 font-medium">Run ID</th>
+            <th className="pb-2 font-medium">Profile</th>
             <th className="pb-2 font-medium">Prompt</th>
             <th className="pb-2 font-medium">Input files</th>
             <th className="pb-2 font-medium">Output file</th>
             <th className="pb-2 font-medium">Models</th>
-            <th className="pb-2 text-right font-medium">Best acc.</th>
-            <th className="pb-2 text-right font-medium">Cost</th>
-            <th className="pb-2 text-right font-medium">Created</th>
+            <th className="whitespace-nowrap pb-2 pl-3 text-right font-medium">Best acc.</th>
+            <th className="pb-2 pl-3 text-right font-medium">Cost</th>
+            <th className="pb-2 pl-4 text-right font-medium">Created</th>
           </tr>
         </thead>
         <tbody>
@@ -58,6 +59,20 @@ export function RunsTable({ runs, compact = false }: { runs: RunListItem[]; comp
                     )}
                   </div>
                 </td>
+                <td className="max-w-[12rem] py-2.5 pr-3">
+                  {r.profile_id ? (
+                    <Link
+                      href={`/profiles/${r.profile_id}?version=${r.profile_version}`}
+                      onClick={(e) => e.stopPropagation()}
+                      className="hover:text-accent"
+                    >
+                      <span className="font-medium">{r.profile_name}</span>{" "}
+                      <span className="rounded bg-accent/10 px-1 text-xs text-accent">v{r.profile_version}</span>
+                    </Link>
+                  ) : (
+                    <span className="text-muted">–</span>
+                  )}
+                </td>
                 <td className="max-w-xs py-2.5 pr-3">
                   <div className="font-medium">{r.prompt_name}</div>
                   {!compact && (
@@ -81,9 +96,9 @@ export function RunsTable({ runs, compact = false }: { runs: RunListItem[]; comp
                   {r.models.slice(0, 3).join(", ")}
                   {r.models.length > 3 && <span className="text-muted"> +{r.models.length - 3}</span>}
                 </td>
-                <td className="tabular py-2.5 text-right">{pct(r.best_accuracy, 1)}</td>
-                <td className="tabular py-2.5 text-right">{usd(r.total_cost_usd)}</td>
-                <td className="py-2.5 text-right text-xs text-ink-2">
+                <td className="tabular whitespace-nowrap py-2.5 pl-3 text-right">{pct(r.best_accuracy, 1)}</td>
+                <td className="tabular whitespace-nowrap py-2.5 pl-3 text-right">{usd(r.total_cost_usd)}</td>
+                <td className="py-2.5 pl-4 text-right text-xs text-ink-2">
                   <div className="whitespace-nowrap">{when(r.created_at)}</div>
                   {r.created_by && <div className="text-muted">{r.created_by}</div>}
                 </td>
