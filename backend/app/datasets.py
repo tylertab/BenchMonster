@@ -134,11 +134,13 @@ def validate_rows(rows: list[tuple[int, dict]], schema: dict) -> dict:
     return {"checked": len(rows), "invalid": invalid, "errors": errors}
 
 
-def typed_row(row: dict[str, str], schema: dict | None, drop: tuple[str, ...] = ()) -> dict:
-    """A row as typed JSON (per the schema), e.g. "true" -> true, for expected outputs."""
+def typed_row(row: dict[str, str], schema: dict | None, drop: tuple[str, ...] = (), order: list[str] | None = None) -> dict:
+    """A row as typed JSON (per the schema), e.g. "true" -> true, in the file's column order."""
     props = (schema or {}).get("properties") or {}
+    keys = [k for k in (order or []) if k in row] + [k for k in row if k not in (order or [])]
     out = {}
-    for k, v in row.items():
+    for k in keys:
+        v = row[k]
         if k in drop:
             continue
         t = props.get(k, {}).get("type")

@@ -5,6 +5,8 @@ old version copies it forward as the newest version. Runs start from a
 specific version (the current one by default).
 """
 
+import json
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
@@ -53,7 +55,8 @@ async def _version(profile_id: int, version: int) -> dict:
         "select id, display_name, model_id, active from models where id = any($1) order by display_name", v["model_ids"]
     )
     out = {k: v[k] for k in ("version", "prompt_name", "system_prompt", "template", "scoring_method",
-                             "scoring_config", "model_ids", "params", "note", "created_at", "created_by_name")}
+                             "scoring_config", "model_ids", "params", "note", "created_at", "created_by_name",
+                             "bindings", "expected_text")}
     return {**out, "variables": templates.variables(v["template"]),
             "datasets": [dict(d) for d in datasets], "models": [dict(m) for m in models]}
 
@@ -65,6 +68,7 @@ def _as_config(v: dict) -> runconfig.RunConfig:
                                        expected_column=d["expected_column"],
                                        expected_dataset_id=d["expected_dataset_id"], input_key=d["input_key"],
                                        expected_key=d["expected_key"]) for d in v["datasets"]],
+        bindings=v["bindings"] or {}, expected_text=v["expected_text"],
         scoring_method=v["scoring_method"], scoring_config=v["scoring_config"], model_ids=v["model_ids"],
         **{k: v["params"][k] for k in ("max_tokens", "temperature", "concurrency", "mode", "batch_size") if k in v["params"]},
     )
@@ -72,13 +76,19 @@ def _as_config(v: dict) -> runconfig.RunConfig:
 
 def _sections(cfg: runconfig.RunConfig) -> dict:
     """Comparable view of each config section, for change detection."""
+    variables = templates.variables(cfg.template)
+    bindings = {k: b for k, b in cfg.bindings_json().items() if k in variables}
+    record_vars = [v for v in variables if v not in bindings]
     return {
         "prompt": (cfg.prompt_name.strip(), (cfg.system_prompt or "").strip(), cfg.template),
         # Unmapped variables default to same-named columns, so compare resolved mappings.
-        "inputs": [(d.dataset_id, sorted({v: d.mapping.get(v) or v for v in templates.variables(cfg.template)}.items()),
-                    d.expected_column or None, d.expected_dataset_id, d.input_key or None, d.expected_key or None)
-                   for d in cfg.datasets],
-        "scoring": (cfg.scoring_method, cfg.scoring_config),
+        "inputs": (
+            [(d.dataset_id, sorted({v: d.mapping.get(v) or v for v in record_vars}.items()),
+              d.expected_column or None, d.expected_dataset_id, d.input_key or None, d.expected_key or None)
+             for d in cfg.datasets],
+            sorted((k, json.dumps(b, sort_keys=True)) for k, b in bindings.items()),
+        ),
+        "scoring": (cfg.scoring_method, cfg.scoring_config, (cfg.expected_text or "").strip() or None),
         "models": sorted(set(cfg.model_ids)),
         "params": cfg.params(),
     }
@@ -96,11 +106,11 @@ async def _insert_version(conn, profile_id: int, cfg: runconfig.RunConfig, datas
     )
     version_id = await conn.fetchval(
         """insert into profile_versions (profile_id, version, prompt_name, system_prompt, template, scoring_method,
-               scoring_config, model_ids, params, note, created_by)
-           values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) returning id""",
+               scoring_config, model_ids, params, note, created_by, bindings, expected_text)
+           values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) returning id""",
         profile_id, version, cfg.prompt_name.strip(), (cfg.system_prompt or "").strip() or None, cfg.template,
         cfg.scoring_method, cfg.scoring_config, sorted(set(cfg.model_ids)), cfg.params(),
-        (note or "").strip() or None, user_id,
+        (note or "").strip() or None, user_id, cfg.bindings_json(), (cfg.expected_text or "").strip() or None,
     )
     await conn.executemany(
         """insert into profile_version_datasets (version_id, position, dataset_id, dataset_name, filename, mapping,

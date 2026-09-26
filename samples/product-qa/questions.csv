@@ -1,0 +1,7 @@
+qid,question,answer
+Q1,What is the SKU of the cheapest phone?,PH-310
+Q2,Which laptop is currently in stock?,NB-100
+Q3,What is the SKU of the lightest product that is in stock?,HP-020
+Q4,What is the SKU of the most expensive product?,NB-200
+Q5,What is the SKU of the only tablet?,TB-010
+Q6,Which product has the most RAM among in-stock items? Give the SKU.,NB-100
