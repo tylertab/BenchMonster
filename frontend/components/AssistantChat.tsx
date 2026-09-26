@@ -1,10 +1,12 @@
 "use client";
 
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { api, type ChatMessage, type ToolCall } from "@/lib/api";
 import { useVoice } from "@/lib/useVoice";
 import { ResultTable } from "./SqlConsole";
 import { Button, Card } from "./ui";
+
+const MAX_INPUT_PX = 240; // about 10 lines
 
 const SUGGESTIONS = [
   "Which model is the best value, and why?",
@@ -83,6 +85,16 @@ export function AssistantChat({
   const [speakReplies, setSpeakReplies] = useState(false);
   const voice = useVoice();
   const bottom = useRef<HTMLDivElement>(null);
+  const textarea = useRef<HTMLTextAreaElement>(null);
+
+  // Grow the input with its content, up to MAX_INPUT_PX, then scroll inside it.
+  useLayoutEffect(() => {
+    const el = textarea.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, MAX_INPUT_PX)}px`;
+    el.style.overflowY = el.scrollHeight > MAX_INPUT_PX ? "auto" : "hidden";
+  }, [input]);
 
   useEffect(() => {
     api.chatHistory(runId).then(setMessages);
@@ -164,7 +176,7 @@ export function AssistantChat({
           )}
           {messages.map((m) =>
             m.role === "user" ? (
-              <div key={m.id} className="ml-8 rounded-lg bg-accent px-3 py-2 text-sm text-white">
+              <div key={m.id} className="ml-8 whitespace-pre-wrap break-words rounded-lg bg-accent px-3 py-2 text-sm text-white">
                 {m.content}
               </div>
             ) : (
@@ -181,17 +193,27 @@ export function AssistantChat({
           <div ref={bottom} />
         </div>
         <form
-          className="mt-3 flex gap-2"
+          className="mt-3 flex items-end gap-2"
           onSubmit={(e) => {
             e.preventDefault();
             send(input);
           }}
         >
-          <input
+          <textarea
+            ref={textarea}
+            rows={1}
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            placeholder="Ask about this run…"
-            className="flex-1 rounded-md border border-line bg-surface px-3 py-2 text-sm outline-none focus:border-accent"
+            onKeyDown={(e) => {
+              // Enter sends; Shift+Enter inserts a newline. Ignore Enter while an IME is composing.
+              if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+                e.preventDefault();
+                send(input);
+              }
+            }}
+            placeholder="Ask about this run…  (Shift+Enter for a new line)"
+            aria-label="Message the AI analyst"
+            className="min-w-0 flex-1 resize-none rounded-md border border-line bg-surface px-3 py-2 text-sm leading-5 outline-none focus:border-accent"
           />
           <Button type="submit" disabled={busy || !input.trim()}>
             Send
