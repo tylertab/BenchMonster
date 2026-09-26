@@ -1,4 +1,4 @@
-"""Execute a benchmark run: every (model, case) pair as a real-time streaming call.
+"""Execute a run: every (model, input) pair as a real-time streaming call.
 
 Requests run concurrently, capped per model, with retries on 429/5xx/network
 errors. Each result row is written as soon as it finishes, so the UI can poll
@@ -23,12 +23,12 @@ def start(run_id: int) -> None:
     task.add_done_callback(_tasks.discard)
 
 
-def build_messages(bench, case_input: str) -> list[dict]:
+def build_messages(run, prompt: str) -> list[dict]:
+    """Inputs were rendered from the template when the run was created."""
     msgs = []
-    if bench["system_prompt"]:
-        msgs.append({"role": "system", "content": bench["system_prompt"]})
-    # str.replace rather than str.format: inputs often contain literal braces.
-    msgs.append({"role": "user", "content": bench["prompt_template"].replace("{input}", case_input)})
+    if run["system_prompt"]:
+        msgs.append({"role": "system", "content": run["system_prompt"]})
+    msgs.append({"role": "user", "content": prompt})
     return msgs
 
 
@@ -47,16 +47,16 @@ async def _call_with_retries(ep, messages, params) -> tuple[providers.ChatResult
     raise AssertionError("unreachable")
 
 
-async def _run_case(run_id: int, bench, model, case, params, sem: asyncio.Semaphore) -> None:
+async def _run_input(run_id: int, run, model, inp, params, sem: asyncio.Semaphore) -> None:
     ep = providers.ModelEndpoint.from_row(model)
     async with sem:
         try:
-            r, attempts = await _call_with_retries(ep, build_messages(bench, case["input"]), params)
+            r, attempts = await _call_with_retries(ep, build_messages(run, inp["prompt"]), params)
         except providers.ProviderError as e:
             await db.pool().execute(
-                """insert into results (run_id, case_id, model_id, score, passed, error, attempts)
+                """insert into results (run_id, input_id, model_id, score, passed, error, attempts)
                    values ($1, $2, $3, 0, false, $4, $5)""",
-                run_id, case["id"], model["id"], str(e)[:1000], getattr(e, "attempts", 1),
+                run_id, inp["id"], model["id"], str(e)[:1000], getattr(e, "attempts", 1),
             )
             return
 
@@ -65,17 +65,17 @@ async def _run_case(run_id: int, bench, model, case, params, sem: asyncio.Semaph
         error = f"hit max_tokens before answering ({r.reasoning_tokens} reasoning tokens)"
     try:
         s = await scoring.score(
-            bench["scoring_method"], bench["scoring_config"], case["input"], case["expected"], r.output
+            run["scoring_method"], run["scoring_config"], inp["prompt"], inp["expected"], r.output
         )
     except Exception as e:  # a judge failure shouldn't lose the model's output
         s = scoring.Score(0.0, False, f"scoring failed: {e}")
 
     await db.pool().execute(
-        """insert into results (run_id, case_id, model_id, output, reasoning, score, passed,
+        """insert into results (run_id, input_id, model_id, output, reasoning, score, passed,
                judge_rationale, latency_ms, ttft_ms, tokens_in, tokens_out, reasoning_tokens,
                tokens_per_sec, cost_usd, error, attempts)
            values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)""",
-        run_id, case["id"], model["id"], r.output, r.reasoning or None, s.score, s.passed,
+        run_id, inp["id"], model["id"], r.output, r.reasoning or None, s.score, s.passed,
         s.rationale, r.latency_ms, r.ttft_ms, r.tokens_in, r.tokens_out, r.reasoning_tokens,
         r.tokens_per_sec, r.cost_usd, error, attempts,
     )
@@ -85,9 +85,9 @@ async def execute(run_id: int) -> None:
     pool = db.pool()
     try:
         run = await pool.fetchrow("select * from runs where id = $1", run_id)
-        bench = await pool.fetchrow("select * from benchmarks where id = $1", run["benchmark_id"])
-        cases = await pool.fetch(
-            "select id, input, expected from cases where benchmark_id = $1 order by idx", bench["id"]
+        inputs = await pool.fetch(
+            "select id, prompt, expected from run_inputs where run_id = $1 order by dataset_position, row_idx",
+            run_id,
         )
         models = await pool.fetch(
             "select m.* from models m join run_models rm on rm.model_id = m.id where rm.run_id = $1", run_id
@@ -98,7 +98,7 @@ async def execute(run_id: int) -> None:
         jobs = []
         for model in models:
             sem = asyncio.Semaphore(params["concurrency"])  # per-model cap
-            jobs += [_run_case(run_id, bench, model, c, params, sem) for c in cases]
+            jobs += [_run_input(run_id, run, model, i, params, sem) for i in inputs]
         await asyncio.gather(*jobs)
 
         await pool.execute("update runs set status = 'completed', finished_at = now() where id = $1", run_id)

@@ -52,7 +52,9 @@ TOOLS = [
 SYSTEM = """You are BenchMonster's benchmark analyst. You help the user understand results of an LLM benchmark run by querying the data with SQL.
 
 ## Current run
-run_id = {run_id}; benchmark "{benchmark}" (scoring: {scoring_method}); status {status}; {total_cases} cases per model.
+run_id = {run_id}; prompt "{prompt_name}" (scoring: {scoring_method}); status {status}; {total_inputs} inputs per model from {input_files}.
+Prompt template:
+{template}
 
 Per-model summary (from model_summary):
 {summary}
@@ -92,20 +94,23 @@ def _summary_text(rows) -> str:
 async def _system_prompt(org_id: int, run_id: int, user_message: str) -> str:
     pool = db.pool()
     run = await pool.fetchrow(
-        """select r.id, r.status, r.total_cases, b.name, b.scoring_method
-           from runs r join benchmarks b on b.id = r.benchmark_id where r.id = $1""",
+        """select r.id, r.status, r.total_inputs, r.prompt_name, r.template, r.scoring_method,
+                  (select string_agg(filename, ', ' order by position) from run_datasets where run_id = r.id) as input_files
+           from runs r where r.id = $1""",
         run_id,
     )
     if not run:
         raise LookupError("run not found")
     summary = await pool.fetch("select * from analytics.model_summary where run_id = $1", run_id)
-    memories = await memory.search(org_id, f"run {run_id} {run['name']}: {user_message}")
+    memories = await memory.search(org_id, f"run {run_id} {run['prompt_name']}: {user_message}")
     return SYSTEM.format(
         run_id=run_id,
-        benchmark=run["name"],
+        prompt_name=run["prompt_name"],
+        template=run["template"][:1500],
+        input_files=run["input_files"],
         scoring_method=run["scoring_method"],
         status=run["status"],
-        total_cases=run["total_cases"],
+        total_inputs=run["total_inputs"],
         summary=_summary_text(summary),
         schema=sqlconsole.schema_as_text(await sqlconsole.schema(org_id)),
         memories="\n".join(f"- {m}" for m in memories) or "(nothing yet)",

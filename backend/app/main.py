@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from . import db, runner, sqlconsole
 from .config import settings
-from .routers import assistant, auth, benchmarks, models, org, query, runs, voice
+from .routers import assistant, auth, datasets, models, org, prompts, query, runs, voice
 
 log = logging.getLogger("uvicorn.error")
 
@@ -34,7 +34,8 @@ app.add_middleware(
 app.include_router(auth.router)
 app.include_router(org.router)
 app.include_router(models.router)
-app.include_router(benchmarks.router)
+app.include_router(prompts.router)
+app.include_router(datasets.router)
 app.include_router(runs.router)
 app.include_router(query.router)
 app.include_router(assistant.router)

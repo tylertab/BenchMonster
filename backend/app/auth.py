@@ -128,7 +128,7 @@ async def require_owner(ctx: Ctx = Depends(current_ctx)) -> Ctx:
 async def run_in_org(run_id: int, org_id: int) -> None:
     """404 unless the run belongs to the org (don't reveal other orgs' ids)."""
     ok = await db.pool().fetchval(
-        "select 1 from runs r join benchmarks b on b.id = r.benchmark_id where r.id = $1 and b.org_id = $2",
+        "select 1 from runs where id = $1 and org_id = $2",
         run_id, org_id,
     )
     if not ok:
