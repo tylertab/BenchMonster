@@ -14,8 +14,8 @@ function Workspace({ scope }: { scope: BMQueryScope }) {
   const [sql, setSql] = useState(() => presetQueries(scope)[0].sql);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   return (
-    <div className="grid gap-6 xl:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)]">
-      <SqlConsole presets={presetQueries(scope)} sql={sql} onSqlChange={setSql} />
+    <div className="grid gap-6 xl:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
+      <SqlConsole sql={sql} onSqlChange={setSql} />
       <AssistantChat scope={scope} onOpenSql={setSql} messages={messages} setMessages={setMessages} />
     </div>
   );

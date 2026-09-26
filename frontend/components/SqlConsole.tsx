@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from "react";
 import { api, ApiError, type QueryResult, type SavedQuery, type SchemaTable } from "@/lib/api";
-import type { Preset } from "@/lib/bmquery";
 import { saveBlob } from "@/lib/download";
 import { Button, Card, ErrorNote, inputClass } from "./ui";
 
@@ -53,7 +52,7 @@ const SHORT_TYPES: Record<string, string> = {
 };
 const shortType = (t: string) => SHORT_TYPES[t] ?? t;
 
-export function SqlConsole({ presets, sql, onSqlChange }: { presets: Preset[]; sql: string; onSqlChange: (s: string) => void }) {
+export function SqlConsole({ sql, onSqlChange }: { sql: string; onSqlChange: (s: string) => void }) {
   const [schema, setSchema] = useState<SchemaTable[]>([]);
   const [result, setResult] = useState<QueryResult | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -174,25 +173,8 @@ export function SqlConsole({ presets, sql, onSqlChange }: { presets: Preset[]; s
       actions={<span className="text-xs text-muted">read-only · your org&apos;s data · 5s timeout</span>}
       className="flex min-w-0 flex-col"
     >
-      <div className="flex flex-wrap gap-1.5">
-        {presets.map((p) => (
-          <button
-            key={p.label}
-            type="button"
-            onClick={() => {
-              setActive(null);
-              onSqlChange(p.sql);
-              run(p.sql);
-            }}
-            className="rounded-full border border-line px-2.5 py-0.5 text-xs text-ink-2 hover:bg-surface-2 hover:text-ink"
-          >
-            {p.label}
-          </button>
-        ))}
-      </div>
-
-      <div className="mt-3 grid gap-3 md:grid-cols-[minmax(13rem,16rem)_minmax(0,1fr)]">
-        <aside className="max-h-96 min-w-0 overflow-y-auto text-xs">
+      <div className="grid gap-3 md:grid-cols-[minmax(13rem,16rem)_minmax(0,1fr)]">
+        <aside className="max-h-96 min-w-0 overflow-y-auto pr-3 text-xs [scrollbar-gutter:stable]">
           <div className="mb-1 font-medium text-muted">Saved queries</div>
           {saved.length === 0 ? (
             <p className="mb-3 text-muted">None yet. Write a query and click Save.</p>
