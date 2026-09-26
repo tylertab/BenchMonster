@@ -29,8 +29,11 @@ export function Button({ variant = "primary", className = "", ...props }: Button
   );
 }
 
-export const inputClass =
-  "w-full rounded-md border border-line bg-surface px-2.5 py-1.5 text-sm outline-none focus:border-accent focus:ring-2 focus:ring-accent/20";
+const fieldBase =
+  "rounded-md border border-line bg-surface px-2.5 py-1.5 text-sm outline-none focus:border-accent focus:ring-2 focus:ring-accent/20";
+export const inputClass = `w-full ${fieldBase}`;
+/** For inline selects that should size to their content. */
+export const compactInputClass = `w-auto ${fieldBase}`;
 
 export function Field({ label, hint, children }: { label: string; hint?: ReactNode; children: ReactNode }) {
   return (

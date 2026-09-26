@@ -120,3 +120,17 @@ export function ScoringConfig({ method, state, onChange }: { method: ScoringMeth
       );
   }
 }
+
+/** Inverse of buildScoringConfig: prefill the form from a stored config (clone & edit). */
+export function scoringStateFrom(cfg: Record<string, unknown>): ScoringState {
+  const s = { ...DEFAULT_SCORING };
+  if (typeof cfg.case_sensitive === "boolean") s.case_sensitive = cfg.case_sensitive;
+  if (typeof cfg.pattern === "string") s.pattern = cfg.pattern;
+  if (cfg.tolerance != null) s.tolerance = String(cfg.tolerance);
+  if (cfg.rel_tolerance != null) s.rel_tolerance = String(cfg.rel_tolerance);
+  if (cfg.schema != null) s.schema = JSON.stringify(cfg.schema, null, 2);
+  if (typeof cfg.match_expected === "boolean") s.match_expected = cfg.match_expected;
+  if (typeof cfg.rubric === "string") s.rubric = cfg.rubric;
+  if (cfg.pass_threshold != null) s.pass_threshold = String(cfg.pass_threshold);
+  return s;
+}

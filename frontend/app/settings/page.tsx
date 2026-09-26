@@ -3,7 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { useAuth } from "@/components/AuthProvider";
-import { Button, Card, Empty, ErrorNote, Field, inputClass } from "@/components/ui";
+import { Button, Card, Empty, ErrorNote, Field, compactInputClass, inputClass } from "@/components/ui";
 import { api, type OrgDetails, type Role } from "@/lib/api";
 import { when } from "@/lib/format";
 
@@ -95,7 +95,7 @@ export default function SettingsPage() {
         <ul className="divide-y divide-line">
           {org.members.map((m) => (
             <li key={m.id} className="flex items-center gap-3 py-2.5 text-sm">
-              <div className="min-w-0 flex-1">
+              <div className="min-w-40 flex-1">
                 <div className="font-medium">
                   {m.name} {m.id === me?.user.id && <span className="text-xs text-muted">(you)</span>}
                 </div>
@@ -103,7 +103,7 @@ export default function SettingsPage() {
               </div>
               {owner ? (
                 <select
-                  className={`${inputClass} w-auto`}
+                  className={compactInputClass}
                   value={m.role}
                   onChange={(e) => act(() => api.setRole(m.id, e.target.value as Role))}
                   aria-label={`Role for ${m.name}`}

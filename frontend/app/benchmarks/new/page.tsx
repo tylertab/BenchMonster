@@ -1,11 +1,13 @@
 "use client";
 
-import { useRouter } from "next/navigation";
-import { useState } from "react";
+import Link from "next/link";
+import { useRouter, useSearchParams } from "next/navigation";
+import { Suspense, useEffect, useState } from "react";
+import { CaseEditor, type Case } from "@/components/CaseEditor";
 import { DEFAULT_PARAMS, ModelPicker, type RunParams } from "@/components/ModelPicker";
-import { buildScoringConfig, DEFAULT_SCORING, METHODS, ScoringConfig, type ScoringState } from "@/components/ScoringConfig";
+import { buildScoringConfig, DEFAULT_SCORING, METHODS, ScoringConfig, scoringStateFrom, type ScoringState } from "@/components/ScoringConfig";
 import { Button, Card, ErrorNote, Field, inputClass } from "@/components/ui";
-import { api, type ParsedDataset, type ScoringMethod } from "@/lib/api";
+import { api, type ParsedDataset, type RunConfig, type ScoringMethod } from "@/lib/api";
 
 const SAMPLE = { url: "/samples/math-word-problems.csv", name: "math-word-problems.csv" };
 
@@ -24,12 +26,47 @@ function Step({ n, title, children }: { n: number; title: string; children: Reac
   );
 }
 
-export default function NewBenchmark() {
+const mapRows = (d: ParsedDataset, inputCol: string, expectedCol: string): Case[] =>
+  d.rows.map((r) => ({ input: r[inputCol] ?? "", expected: expectedCol ? (r[expectedCol] ?? null) : null }));
+
+const norm = (v: string | null | undefined) => (v ?? "").trim();
+
+// jsonb doesn't preserve key order, so compare configs with sorted keys.
+const stable = (v: unknown): string =>
+  Array.isArray(v)
+    ? `[${v.map(stable).join(",")}]`
+    : v && typeof v === "object"
+      ? `{${Object.keys(v)
+          .filter((k) => (v as Record<string, unknown>)[k] !== undefined)
+          .sort()
+          .map((k) => `${JSON.stringify(k)}:${stable((v as Record<string, unknown>)[k])}`)
+          .join(",")}}`
+      : JSON.stringify(v);
+
+/** True when the benchmark definition (not models/params) matches the cloned source. */
+function sameBenchmark(src: RunConfig, b: { name: string; systemPrompt: string; template: string; method: ScoringMethod; config: Record<string, unknown>; cases: Case[] }) {
+  return (
+    src.name === b.name.trim() &&
+    norm(src.system_prompt) === norm(b.systemPrompt) &&
+    src.prompt_template === b.template &&
+    src.scoring_method === b.method &&
+    // Round-trip the source through the form so defaults compare equal ({tolerance} vs {tolerance, rel_tolerance: 0}).
+    stable(buildScoringConfig(src.scoring_method, scoringStateFrom(src.scoring_config))) === stable(b.config) &&
+    src.cases.length === b.cases.length &&
+    src.cases.every((c, i) => c.input === b.cases[i].input && norm(c.expected) === norm(b.cases[i].expected))
+  );
+}
+
+function NewBenchmark() {
   const router = useRouter();
+  const fromRun = useSearchParams().get("from");
+  const [source, setSource] = useState<RunConfig | null>(null);
+
   const [dataset, setDataset] = useState<ParsedDataset | null>(null);
   const [fileName, setFileName] = useState("");
   const [inputCol, setInputCol] = useState("");
   const [expectedCol, setExpectedCol] = useState("");
+  const [cases, setCases] = useState<Case[]>([]);
 
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
@@ -44,18 +81,49 @@ export default function NewBenchmark() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
+  // Clone & edit: prefill everything from the source run.
+  useEffect(() => {
+    if (!fromRun) return;
+    Promise.all([api.runConfig(fromRun), api.models()]).then(
+      ([cfg, models]) => {
+        setSource(cfg);
+        setCases(cfg.cases);
+        setFileName(`cloned from run #${fromRun}`);
+        setName(cfg.name);
+        setDescription(cfg.description ?? "");
+        setSystemPrompt(cfg.system_prompt ?? "");
+        setTemplate(cfg.prompt_template);
+        setMethod(cfg.scoring_method);
+        setScoring(scoringStateFrom(cfg.scoring_config));
+        const available = new Set(models.map((m) => m.id));
+        setModelIds(cfg.model_ids.filter((id) => available.has(id)));
+        setParams({ ...DEFAULT_PARAMS, ...cfg.params });
+      },
+      (e) => setError(e.message),
+    );
+  }, [fromRun]);
+
   const loadFile = async (file: File) => {
     setError(null);
     try {
       const parsed = await api.parseDataset(file);
+      const inCol = parsed.suggested_input;
+      const exCol = parsed.suggested_expected ?? "";
       setDataset(parsed);
       setFileName(file.name);
-      setInputCol(parsed.suggested_input);
-      setExpectedCol(parsed.suggested_expected ?? "");
+      setInputCol(inCol);
+      setExpectedCol(exCol);
+      setCases(mapRows(parsed, inCol, exCol));
       if (!name) setName(file.name.replace(/\.[^.]+$/, "").replace(/[-_]/g, " "));
     } catch (e) {
       setError((e as Error).message);
     }
+  };
+
+  const remap = (inCol: string, exCol: string) => {
+    setInputCol(inCol);
+    setExpectedCol(exCol);
+    if (dataset) setCases(mapRows(dataset, inCol, exCol));
   };
 
   const loadSample = async () => {
@@ -66,11 +134,13 @@ export default function NewBenchmark() {
   };
 
   const methodInfo = METHODS.find((m) => m.value === method)!;
+  const hasExpected = cases.some((c) => norm(c.expected));
 
   const submit = async () => {
     setError(null);
-    if (!dataset) return setError("Upload a dataset first.");
-    if (methodInfo.needsExpected && !expectedCol) return setError(`${methodInfo.label} scoring needs an expected-output column.`);
+    if (cases.length === 0) return setError("Add a dataset first.");
+    if (cases.some((c) => !c.input.trim())) return setError("Every case needs an input (delete empty rows).");
+    if (methodInfo.needsExpected && !hasExpected) return setError(`${methodInfo.label} scoring needs expected outputs.`);
     if (!template.includes("{input}")) return setError("The prompt template must contain {input}.");
     if (modelIds.length === 0) return setError("Pick at least one model.");
     let scoringConfig;
@@ -81,16 +151,22 @@ export default function NewBenchmark() {
     }
     setBusy(true);
     try {
-      const bench = await api.createBenchmark({
-        name: name.trim() || fileName,
-        description: description.trim() || undefined,
-        system_prompt: systemPrompt.trim() || undefined,
-        prompt_template: template,
-        scoring_method: method,
-        scoring_config: scoringConfig,
-        cases: dataset.rows.map((r) => ({ input: r[inputCol] ?? "", expected: expectedCol ? r[expectedCol] ?? null : null })),
-      });
-      const run = await api.startRun(bench.id, { model_ids: modelIds, ...params });
+      const runParams = { model_ids: modelIds, ...params };
+      const reuse = source && sameBenchmark(source, { name, systemPrompt, template, method, config: scoringConfig, cases });
+      const benchmarkId = reuse
+        ? source.benchmark_id
+        : (
+            await api.createBenchmark({
+              name: name.trim() || fileName,
+              description: description.trim() || undefined,
+              system_prompt: systemPrompt.trim() || undefined,
+              prompt_template: template,
+              scoring_method: method,
+              scoring_config: scoringConfig,
+              cases,
+            })
+          ).id;
+      const run = await api.startRun(benchmarkId, runParams);
       router.push(`/runs/${run.id}`);
     } catch (e) {
       setError((e as Error).message);
@@ -98,14 +174,26 @@ export default function NewBenchmark() {
     }
   };
 
-  const preview = dataset?.rows.slice(0, 5) ?? [];
-  const totalCalls = (dataset?.rows.length ?? 0) * modelIds.length;
+  const totalCalls = cases.length * modelIds.length;
+  let previewConfig: Record<string, unknown> | null = null;
+  try {
+    previewConfig = buildScoringConfig(method, scoring);
+  } catch {}
+  const reusing = Boolean(source && previewConfig && sameBenchmark(source, { name, systemPrompt, template, method, config: previewConfig, cases }));
 
   return (
     <div className="mx-auto max-w-4xl space-y-6">
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Create benchmark</h1>
-        <p className="mt-1 text-sm text-ink-2">Upload a dataset, describe what a good output looks like, and pick the models to compare.</p>
+        <h1 className="text-2xl font-semibold tracking-tight">{fromRun ? `Clone run #${fromRun}` : "Create benchmark"}</h1>
+        <p className="mt-1 text-sm text-ink-2">
+          {fromRun ? (
+            <>
+              Everything from <Link href={`/runs/${fromRun}`} className="text-accent hover:underline">run #{fromRun}</Link> is prefilled. Edit anything, then start a new run.
+            </>
+          ) : (
+            "Upload a dataset, describe what a good output looks like, and pick the models to compare."
+          )}
+        </p>
       </div>
 
       <Step n={1} title="Input dataset">
@@ -113,52 +201,40 @@ export default function NewBenchmark() {
           <div className="flex flex-wrap items-center gap-3">
             <label className="cursor-pointer rounded-md border border-dashed border-line px-4 py-3 text-sm hover:bg-surface-2">
               <input type="file" accept=".csv,.jsonl,.ndjson,.json" className="sr-only" onChange={(e) => e.target.files?.[0] && loadFile(e.target.files[0])} />
-              {fileName ? `📄 ${fileName} (${dataset?.rows.length} rows) · replace` : "Choose a CSV, JSONL, or JSON file"}
+              {fileName ? `📄 ${fileName} · replace` : "Choose a CSV, JSONL, or JSON file"}
             </label>
-            <Button type="button" variant="ghost" onClick={loadSample}>
-              or use the sample dataset
-            </Button>
+            {!fromRun && (
+              <Button type="button" variant="ghost" onClick={loadSample}>
+                or use the sample dataset
+              </Button>
+            )}
+            {cases.length === 0 && (
+              <Button type="button" variant="ghost" onClick={() => setCases([{ input: "", expected: "" }])}>
+                or type cases by hand
+              </Button>
+            )}
           </div>
 
           {dataset && (
-            <>
-              <div className="grid grid-cols-2 gap-3">
-                <Field label="Input column" hint="Sent to the model as {input}">
-                  <select className={inputClass} value={inputCol} onChange={(e) => setInputCol(e.target.value)}>
-                    {dataset.columns.map((c) => (
-                      <option key={c}>{c}</option>
-                    ))}
-                  </select>
-                </Field>
-                <Field label="Expected output column">
-                  <select className={inputClass} value={expectedCol} onChange={(e) => setExpectedCol(e.target.value)}>
-                    <option value="">(none)</option>
-                    {dataset.columns.map((c) => (
-                      <option key={c}>{c}</option>
-                    ))}
-                  </select>
-                </Field>
-              </div>
-              <div className="overflow-x-auto rounded-md border border-line">
-                <table className="w-full text-xs">
-                  <thead className="bg-surface-2 text-left text-muted">
-                    <tr>
-                      <th className="px-2 py-1.5 font-medium">input</th>
-                      <th className="px-2 py-1.5 font-medium">expected</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {preview.map((r, i) => (
-                      <tr key={i} className="border-t border-line align-top">
-                        <td className="max-w-md truncate px-2 py-1.5">{r[inputCol]}</td>
-                        <td className="max-w-xs truncate px-2 py-1.5 text-ink-2">{expectedCol ? r[expectedCol] : "–"}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </>
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Input column" hint="Sent to the model as {input}">
+                <select className={inputClass} value={inputCol} onChange={(e) => remap(e.target.value, expectedCol)}>
+                  {dataset.columns.map((c) => (
+                    <option key={c}>{c}</option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="Expected output column" hint="Changing columns re-reads the file (discards edits)">
+                <select className={inputClass} value={expectedCol} onChange={(e) => remap(inputCol, e.target.value)}>
+                  <option value="">(none)</option>
+                  {dataset.columns.map((c) => (
+                    <option key={c}>{c}</option>
+                  ))}
+                </select>
+              </Field>
+            </div>
           )}
+          {cases.length > 0 && <CaseEditor cases={cases} onChange={setCases} />}
         </div>
       </Step>
 
@@ -175,7 +251,7 @@ export default function NewBenchmark() {
           <Field label="System prompt" hint="Optional instructions sent with every case">
             <textarea rows={2} className={inputClass} value={systemPrompt} onChange={(e) => setSystemPrompt(e.target.value)} placeholder="You are a helpful assistant. Answer concisely." />
           </Field>
-          <Field label="Prompt template" hint="{input} is replaced by each row's input">
+          <Field label="Prompt template" hint="{input} is replaced by each case's input">
             <textarea rows={2} className={`${inputClass} font-mono`} value={template} onChange={(e) => setTemplate(e.target.value)} />
           </Field>
 
@@ -204,12 +280,27 @@ export default function NewBenchmark() {
       </Step>
 
       <ErrorNote error={error} />
-      <div className="flex items-center justify-end gap-3">
+      <div className="flex flex-wrap items-center justify-end gap-3">
+        {source && (
+          <span className="mr-auto text-xs text-ink-2">
+            {reusing
+              ? `Benchmark unchanged: the new run joins "${source.name}" so runs stay comparable.`
+              : "Dataset, prompts, or scoring changed: this creates a new benchmark."}
+          </span>
+        )}
         {totalCalls > 0 && <span className="text-sm text-ink-2">{totalCalls.toLocaleString()} model calls</span>}
         <Button onClick={submit} disabled={busy}>
-          {busy ? "Starting…" : "Create & run benchmark"}
+          {busy ? "Starting…" : source ? "Start new run" : "Create & run benchmark"}
         </Button>
       </div>
     </div>
+  );
+}
+
+export default function NewBenchmarkPage() {
+  return (
+    <Suspense>
+      <NewBenchmark />
+    </Suspense>
   );
 }

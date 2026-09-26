@@ -75,12 +75,26 @@ export default function RunPage() {
             {run.finished_at && ` · finished ${when(run.finished_at)}`}
           </p>
         </div>
-        <Link
-          href={`/runs/${run.id}/review`}
-          className="ml-auto rounded-md bg-accent px-4 py-2 text-sm font-medium text-white hover:opacity-90"
-        >
-          Review with SQL & AI →
-        </Link>
+        <div className="ml-auto flex flex-wrap items-center gap-2">
+          <a
+            href={`/api/runs/${run.id}/export.csv`}
+            download
+            className="rounded-md border border-line bg-surface px-3 py-2 text-sm font-medium hover:bg-surface-2"
+            title="Every input and output of this run as CSV"
+          >
+            ⬇ Download CSV
+          </a>
+          <Link
+            href={`/benchmarks/new?from=${run.id}`}
+            className="rounded-md border border-line bg-surface px-3 py-2 text-sm font-medium hover:bg-surface-2"
+            title="Start a new run from this run's dataset, prompts, scoring, and models"
+          >
+            ⧉ Clone & edit
+          </Link>
+          <Link href={`/runs/${run.id}/review`} className="rounded-md bg-accent px-4 py-2 text-sm font-medium text-white hover:opacity-90">
+            Review with SQL & AI →
+          </Link>
+        </div>
       </div>
 
       <ErrorNote error={run.error} />

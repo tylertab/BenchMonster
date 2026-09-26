@@ -3,7 +3,7 @@
 import { Fragment, useEffect, useState } from "react";
 import { api, type Result, type Run } from "@/lib/api";
 import { ms, num, usd } from "@/lib/format";
-import { Card, Empty, inputClass, PassBadge } from "./ui";
+import { Card, compactInputClass, Empty, PassBadge } from "./ui";
 
 export function ResultsExplorer({ runId, models, refreshKey }: { runId: number; models: Run["models"]; refreshKey: number }) {
   const [modelId, setModelId] = useState<number | undefined>();
@@ -20,7 +20,7 @@ export function ResultsExplorer({ runId, models, refreshKey }: { runId: number; 
       title="Per-case results"
       actions={
         <>
-          <select className={`${inputClass} w-auto`} value={modelId ?? ""} onChange={(e) => setModelId(e.target.value ? Number(e.target.value) : undefined)}>
+          <select className={compactInputClass} value={modelId ?? ""} onChange={(e) => setModelId(e.target.value ? Number(e.target.value) : undefined)}>
             <option value="">All models</option>
             {models.map((m) => (
               <option key={m.id} value={m.id}>

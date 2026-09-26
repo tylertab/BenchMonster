@@ -49,7 +49,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!checked) return;
     if (!me && !publicPage) router.replace(`/login?next=${encodeURIComponent(pathname)}`);
-    if (me && (pathname === "/login" || pathname === "/signup")) router.replace("/");
+    if (me && (pathname === "/login" || pathname === "/signup")) {
+      const next = new URLSearchParams(window.location.search).get("next");
+      router.replace(next?.startsWith("/") ? next : "/");
+    }
   }, [checked, me, publicPage, pathname, router]);
 
   const ready = checked && (publicPage || me);
