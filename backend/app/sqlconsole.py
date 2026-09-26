@@ -36,9 +36,10 @@ async def _org_pool(org_id: int) -> asyncpg.Pool:
                     await orgs.provision_reader(conn, org_id)
                 password = await db.pool().fetchval("select reader_password from organizations where id = $1", org_id)
             base = urlparse(settings.database_url)
+            ssl = "require" if "sslmode=require" in (base.query or "") else None
             _pools[org_id] = await asyncpg.create_pool(
                 host=base.hostname, port=base.port, database=base.path.lstrip("/"),
-                user=orgs.role_name(org_id), password=password, ssl="require",
+                user=orgs.role_name(org_id), password=password, ssl=ssl,
                 min_size=0, max_size=3, init=db.init_conn,
             )
     return _pools[org_id]

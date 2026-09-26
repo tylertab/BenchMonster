@@ -2,11 +2,13 @@ from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-ROOT_ENV = Path(__file__).resolve().parents[2] / ".env"
+ROOT = Path(__file__).resolve().parents[2]
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=ROOT_ENV, extra="ignore")
+    # .env holds production values (it's what deploy.sh ships); an optional,
+    # gitignored .env.local overrides them for local development.
+    model_config = SettingsConfigDict(env_file=(ROOT / ".env", ROOT / ".env.local"), extra="ignore")
 
     database_url: str
 
