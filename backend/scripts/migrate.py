@@ -1,17 +1,17 @@
 """Apply pending SQL migrations in backend/migrations, in filename order.
 
-Also gives the read-only `bench_reader` role a login password taken from
-READONLY_DATABASE_URL, so the SQL console can connect as it.
+Then (re)provision every organization's read-only schema + role, so org views
+pick up any analytics view changes from the migrations just applied.
 """
 
 import asyncio
 import sys
 from pathlib import Path
-from urllib.parse import urlparse
 
 import asyncpg
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from app import orgs  # noqa: E402
 from app.config import settings  # noqa: E402
 
 MIGRATIONS = Path(__file__).resolve().parents[1] / "migrations"
@@ -33,12 +33,10 @@ async def main() -> None:
                 await conn.execute(path.read_text())
                 await conn.execute("insert into schema_migrations (name) values ($1)", path.name)
 
-        if settings.readonly_database_url:
-            ro = urlparse(settings.readonly_database_url)
-            # ALTER ROLE can't take bind parameters; quote the literal server-side.
-            pw = await conn.fetchval("select quote_literal($1)", ro.password)
-            await conn.execute(f'alter role "{ro.username}" login password {pw}')
-            print(f"role {ro.username}: login enabled")
+        org_ids = [r["id"] for r in await conn.fetch("select id from organizations order by id")]
+        for org_id in org_ids:
+            await orgs.provision_reader(conn, org_id)
+        print(f"provisioned readers for {len(org_ids)} org(s)")
     finally:
         await conn.close()
 
