@@ -268,7 +268,7 @@ async def pg_check(cfg: PgConfig, sec: PgSecret, allow_write: bool) -> dict:
             """select current_user as who, current_setting('transaction_read_only') = 'on' as read_only,
                       (select count(*) from information_schema.tables t
                         where t.table_schema not in ('pg_catalog', 'information_schema', 'toolkit_experimental')
-                          and t.table_schema !~ '^_?timescaledb'
+                          and t.table_schema !~ '^_?timescaledb' and t.table_name !~ '^pg_stat_statements'
                           and has_table_privilege(quote_ident(t.table_schema) || '.' || quote_ident(t.table_name), 'SELECT')) as readable,
                       has_schema_privilege($1, 'CREATE') as can_create""",
             cfg.schema_,
@@ -298,7 +298,7 @@ async def pg_tables(cfg: PgConfig, sec: PgSecret) -> list[dict]:
                         where n.nspname = t.table_schema and cl.relname = t.table_name), 0) as approx_rows
                from information_schema.tables t
                where t.table_schema not in ('pg_catalog', 'information_schema', 'toolkit_experimental')
-                 and t.table_schema !~ '^_?timescaledb'
+                 and t.table_schema !~ '^_?timescaledb' and t.table_name !~ '^pg_stat_statements'
                  and has_table_privilege(quote_ident(t.table_schema) || '.' || quote_ident(t.table_name), 'SELECT')
                order by t.table_schema = 'public' desc, t.table_schema, t.table_name
                limit 500"""
@@ -497,7 +497,7 @@ async def pg_schema(cfg: PgConfig, sec: PgSecret) -> list[dict]:
             """select c.table_schema, c.table_name, c.column_name, c.data_type
                from information_schema.columns c
                where c.table_schema not in ('pg_catalog', 'information_schema', 'toolkit_experimental')
-                 and c.table_schema !~ '^_?timescaledb'
+                 and c.table_schema !~ '^_?timescaledb' and c.table_name !~ '^pg_stat_statements'
                  and has_table_privilege(quote_ident(c.table_schema) || '.' || quote_ident(c.table_name), 'SELECT')
                order by c.table_schema = 'public' desc, c.table_schema, c.table_name, c.ordinal_position
                limit 5000"""
