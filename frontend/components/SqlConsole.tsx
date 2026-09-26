@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { api, type QueryResult, type SavedQuery, type SchemaTable } from "@/lib/api";
+import { api, ApiError, type QueryResult, type SavedQuery, type SchemaTable } from "@/lib/api";
 import { Button, Card, ErrorNote, inputClass } from "./ui";
 
 export function presetQueries(runId: number) {
@@ -77,19 +77,53 @@ export function SqlConsole({ runId, sql, onSqlChange }: { runId: number; sql: st
   const [openTable, setOpenTable] = useState<string | null>("results");
 
   // Saved queries (shared across the org). `active` is the one loaded in the editor.
+  // "Save as…" always creates a new query; only "Update" overwrites the active one.
   const [saved, setSaved] = useState<SavedQuery[]>([]);
   const [active, setActive] = useState<SavedQuery | null>(null);
-  const [saveName, setSaveName] = useState<string | null>(null); // non-null = save form open
+  const [saveName, setSaveName] = useState<string | null>(null); // non-null = "Save as" form open
   const refreshSaved = () => api.savedQueries().then(setSaved);
+  const dirty = active !== null && sql !== active.sql;
 
-  const persist = async (asNew: boolean) => {
+  const saveAsNew = async () => {
     const name = (saveName ?? "").trim();
     if (!name) return;
     setError(null);
     try {
-      const q = active && !asNew ? await api.updateQuery(active.id, name, sql) : await api.saveQuery(name, sql);
+      let q: SavedQuery;
+      try {
+        q = await api.saveQuery(name, sql);
+      } catch (e) {
+        const existing = saved.find((s) => s.name.toLowerCase() === name.toLowerCase());
+        if (!(e instanceof ApiError && e.status === 409 && existing)) throw e;
+        if (!window.confirm(`A saved query named "${existing.name}" already exists. Replace it?`)) return;
+        q = await api.updateQuery(existing.id, existing.name, sql);
+      }
       setActive(q);
       setSaveName(null);
+      await refreshSaved();
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+
+  const updateActive = async () => {
+    if (!active) return;
+    setError(null);
+    try {
+      setActive(await api.updateQuery(active.id, active.name, sql));
+      await refreshSaved();
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+
+  const rename = async (q: SavedQuery) => {
+    const name = window.prompt("Rename saved query", q.name)?.trim();
+    if (!name || name === q.name) return;
+    setError(null);
+    try {
+      const updated = await api.updateQuery(q.id, name, q.sql);
+      if (active?.id === q.id) setActive(updated);
       await refreshSaved();
     } catch (e) {
       setError((e as Error).message);
@@ -171,8 +205,12 @@ export function SqlConsole({ runId, sql, onSqlChange }: { runId: number; sql: st
                     className={`flex-1 truncate rounded px-1 py-0.5 text-left hover:bg-surface-2 ${active?.id === q.id ? "bg-accent/10 font-medium text-accent" : ""}`}
                   >
                     ★ {q.name}
+                    {active?.id === q.id && dirty && <span className="text-muted"> •</span>}
                   </button>
-                  <button type="button" onClick={() => remove(q)} className="invisible px-1 text-muted hover:text-critical group-hover:visible" aria-label={`Delete ${q.name}`}>
+                  <button type="button" onClick={() => rename(q)} className="invisible px-0.5 text-muted hover:text-ink group-hover:visible" aria-label={`Rename ${q.name}`}>
+                    ✎
+                  </button>
+                  <button type="button" onClick={() => remove(q)} className="invisible px-0.5 text-muted hover:text-critical group-hover:visible" aria-label={`Delete ${q.name}`}>
                     ×
                   </button>
                 </li>
@@ -221,15 +259,22 @@ export function SqlConsole({ runId, sql, onSqlChange }: { runId: number; sql: st
             </Button>
             <span className="text-xs text-muted">⌘/Ctrl + Enter</span>
             {saveName === null ? (
-              <Button variant="secondary" onClick={() => setSaveName(active?.name ?? "")} disabled={!sql.trim()}>
-                {active ? "Save…" : "Save as…"}
-              </Button>
+              <>
+                {dirty && (
+                  <Button variant="secondary" onClick={updateActive} title={`Overwrite "${active.name}" with the query in the editor`}>
+                    Update “{active.name.length > 18 ? `${active.name.slice(0, 17)}…` : active.name}”
+                  </Button>
+                )}
+                <Button variant="secondary" onClick={() => setSaveName("")} disabled={!sql.trim()}>
+                  Save as…
+                </Button>
+              </>
             ) : (
               <form
                 className="flex items-center gap-1.5"
                 onSubmit={(e) => {
                   e.preventDefault();
-                  persist(false);
+                  saveAsNew();
                 }}
               >
                 <input
@@ -242,13 +287,8 @@ export function SqlConsole({ runId, sql, onSqlChange }: { runId: number; sql: st
                   aria-label="Saved query name"
                 />
                 <Button type="submit" disabled={!saveName.trim()}>
-                  {active ? "Update" : "Save"}
+                  Save
                 </Button>
-                {active && (
-                  <Button type="button" variant="secondary" onClick={() => persist(true)} disabled={!saveName.trim() || saveName.trim() === active.name}>
-                    Save as new
-                  </Button>
-                )}
                 <Button type="button" variant="ghost" onClick={() => setSaveName(null)}>
                   Cancel
                 </Button>

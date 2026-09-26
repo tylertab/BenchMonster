@@ -1,3 +1,4 @@
+import asyncpg
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
@@ -44,13 +45,15 @@ async def list_saved(ctx: auth.Ctx = Depends(auth.current_ctx)):
 
 @router.post("/saved-queries")
 async def save(body: SavedQueryIn, ctx: auth.Ctx = Depends(auth.current_ctx)):
-    """Create, or overwrite the org's query with the same name."""
-    row = await db.pool().fetchrow(
-        """insert into saved_queries (org_id, name, sql, created_by) values ($1, $2, $3, $4)
-           on conflict (org_id, name) do update set sql = excluded.sql, updated_at = now()
-           returning id, name, sql, created_at, updated_at""",
-        ctx.org_id, body.name.strip(), body.sql, ctx.user_id,
-    )
+    """Create a new saved query. Names are unique per org: a clash is a 409, never a silent overwrite."""
+    try:
+        row = await db.pool().fetchrow(
+            """insert into saved_queries (org_id, name, sql, created_by) values ($1, $2, $3, $4)
+               returning id, name, sql, created_at, updated_at""",
+            ctx.org_id, body.name.strip(), body.sql, ctx.user_id,
+        )
+    except asyncpg.UniqueViolationError:
+        raise HTTPException(409, f"a saved query named {body.name.strip()!r} already exists")
     return dict(row)
 
 
@@ -63,10 +66,8 @@ async def update_saved(query_id: int, body: SavedQueryIn, ctx: auth.Ctx = Depend
                where id = $1 and org_id = $2 returning id, name, sql, created_at, updated_at""",
             query_id, ctx.org_id, body.name.strip(), body.sql,
         )
-    except Exception as e:  # unique (org_id, name)
-        if "saved_queries_org_id_name_key" in str(e):
-            raise HTTPException(409, "a saved query with that name already exists")
-        raise
+    except asyncpg.UniqueViolationError:
+        raise HTTPException(409, f"a saved query named {body.name.strip()!r} already exists")
     if not row:
         raise HTTPException(404, "saved query not found")
     return dict(row)
