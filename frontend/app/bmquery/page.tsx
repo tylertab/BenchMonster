@@ -46,10 +46,7 @@ function BMQuery() {
     <div className="space-y-6">
       <div className="flex flex-wrap items-end gap-4">
         <div className="min-w-0">
-          <h1 className="flex items-center gap-2 text-2xl font-semibold tracking-tight">
-            <span className="rounded-md bg-accent px-1.5 py-0.5 font-mono text-base text-white">BM</span>
-            BMQuery
-          </h1>
+          <h1 className="text-2xl font-semibold tracking-tight">BMQuery</h1>
           <p className="mt-1 text-sm text-ink-2">
             {scope.kind === "run" ? (
               <>
