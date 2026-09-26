@@ -88,8 +88,12 @@ function ProfileView() {
           <Link href={`/profiles/${id}/runs`} className="rounded-md border border-line bg-surface px-3 py-1.5 text-sm font-medium hover:bg-surface-2">
             Runs ({profile.versions.reduce((a, x) => a + x.run_count, 0)})
           </Link>
-          <Link href={`/profiles/${id}/edit`} className="rounded-md border border-line bg-surface px-3 py-1.5 text-sm font-medium hover:bg-surface-2">
-            Edit
+          <Link
+            href={isCurrent ? `/profiles/${id}/edit` : `/profiles/${id}/edit?from=${requested}`}
+            className="rounded-md border border-line bg-surface px-3 py-1.5 text-sm font-medium hover:bg-surface-2"
+            title={isCurrent ? undefined : `Start editing from v${requested}; saving creates v${profile.current_version + 1}`}
+          >
+            {isCurrent ? "Edit" : `Edit from v${requested}`}
           </Link>
           <Button variant="secondary" onClick={duplicate} disabled={!v} title="Copy this version into a new profile, e.g. to make an EU variant of a US benchmark">
             Duplicate
