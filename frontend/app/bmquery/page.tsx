@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, useEffect, useRef, useState } from "react";
 import { AssistantChat } from "@/components/AssistantChat";
 import { SqlConsole } from "@/components/SqlConsole";
 import { compactInputClass, StatusBadge } from "@/components/ui";
@@ -13,10 +13,16 @@ import { type BMQueryScope, presetQueries, scopeKey } from "@/lib/bmquery";
 function Workspace({ scope }: { scope: BMQueryScope }) {
   const [sql, setSql] = useState(() => presetQueries(scope)[0].sql);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const switchSource = useRef<((name: string | null) => void) | null>(null);
+  // An analyst query opens in the console on the database it ran against.
+  const openSql = (text: string, source?: string | null) => {
+    switchSource.current?.(source ?? null);
+    setSql(text);
+  };
   return (
     <div className="grid gap-6 xl:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
-      <SqlConsole sql={sql} onSqlChange={setSql} />
-      <AssistantChat scope={scope} onOpenSql={setSql} messages={messages} setMessages={setMessages} />
+      <SqlConsole sql={sql} onSqlChange={setSql} registerSourceSwitch={(fn) => (switchSource.current = fn)} />
+      <AssistantChat scope={scope} onOpenSql={openSql} messages={messages} setMessages={setMessages} />
     </div>
   );
 }

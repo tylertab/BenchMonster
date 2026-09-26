@@ -440,7 +440,7 @@ export type QueryResult = {
 export type SchemaTable = { name: string; columns: { name: string; type: string }[] };
 
 export type ToolCall =
-  | { tool: "run_sql"; sql: string; columns?: string[]; rows?: unknown[][]; truncated?: boolean; error?: string }
+  | { tool: "run_sql"; sql: string; source?: string | null; columns?: string[]; rows?: unknown[][]; truncated?: boolean; error?: string }
   | { tool: "save_finding"; finding: string; saved: boolean };
 
 export type ChatMessage = {

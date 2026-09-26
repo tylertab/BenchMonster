@@ -12,7 +12,10 @@ from decimal import Decimal
 
 from fastapi import HTTPException
 
-from . import db, memory, providers, sqlconsole
+import asyncio
+
+from . import connections as conns
+from . import db, linked, memory, providers, sqlconsole
 from .config import settings
 
 MAX_TOOL_ROUNDS = 6
@@ -60,13 +63,20 @@ TOOLS = [
         "function": {
             "name": "run_sql",
             "description": (
-                "Run one read-only PostgreSQL SELECT against the results views. "
-                "Filter to the current scope (run_id / profile_id) unless asked to compare more broadly. "
-                "Returns up to 50 rows."
+                "Run one read-only PostgreSQL SELECT. By default it runs against BenchMonster's results views; "
+                "set source to a connected database's name to query that database instead. "
+                "Filter BenchMonster queries to the current scope (run_id / profile_id) unless asked to compare "
+                "more broadly. Returns up to 50 rows."
             ),
             "parameters": {
                 "type": "object",
-                "properties": {"sql": {"type": "string", "description": "A single SELECT statement"}},
+                "properties": {
+                    "sql": {"type": "string", "description": "A single SELECT statement"},
+                    "source": {
+                        "type": "string",
+                        "description": "'benchmonster' (default) or the exact name of a connected database listed in the system prompt",
+                    },
+                },
                 "required": ["sql"],
             },
         },
@@ -101,14 +111,19 @@ Concepts: a benchmark profile is a versioned configuration (prompt + input sets 
 
 Notes: score is 0..1, passed is boolean; latency/ttft in ms; cost_usd in USD; tokens_per_sec is end-to-end throughput. Postgres can't use output aliases inside ORDER BY expressions; repeat the expression instead.
 
+## Connected databases (source = the connection's name)
+{connections}
+
 ## Things you remember from earlier sessions
 {memories}
 
 ## How to work
 - Use run_sql to get facts; never invent numbers. Keep queries small and filtered to the scope.
 - If a query errors, read the error and fix the query.
+- BenchMonster data and each connected database are separate databases: one query can't join across them. Query each and combine the results yourself (e.g. results.variables holds the source row's key for runs that read a connected table).
 - Answer concisely in plain language with the key numbers. You may be read aloud, so avoid big tables unless asked.
-- When you reach a notable, durable conclusion, call save_finding.
+- When you reach a notable, durable conclusion, call save_finding BEFORE writing your answer. Your final message must contain the complete answer (tables included), never just a note that you saved something.
+- When asked for a table, include it as a markdown table in the answer, and mention the SQL can be opened in the console.
 """
 
 
@@ -216,23 +231,68 @@ async def _system_prompt(scope: Scope, user_message: str) -> tuple[str, str]:
     system = SYSTEM.format(
         scope=context,
         schema=sqlconsole.schema_as_text(await sqlconsole.schema(scope.org_id)),
+        connections=await _connections_context(scope.org_id),
         memories="\n".join(f"- {m}" for m in memories) or "(nothing yet)",
     )
     return system, label
+
+
+MAX_CONNECTION_TABLES = 40
+
+
+async def _pg_connections(org_id: int) -> list:
+    return await db.pool().fetch(
+        """select id, name from connections where org_id = $1 and kind = 'postgres'
+           and coalesce((access->>'read')::boolean, false) order by lower(name)""",
+        org_id,
+    )
+
+
+async def _connections_context(org_id: int) -> str:
+    """Each readable Postgres connection with its tables, for the model to query with source=<name>."""
+    async def describe(c) -> str:
+        try:
+            _, cfg, sec = await linked.load_connection(org_id, c["id"])
+            tables = await asyncio.wait_for(conns.pg_schema(cfg, sec), timeout=10)
+        except Exception as e:  # an unreachable connection shouldn't break the analyst
+            return f'"{c["name"]}": unavailable ({getattr(e, "detail", None) or type(e).__name__})'
+        more = f"\n  (+{len(tables) - MAX_CONNECTION_TABLES} more tables)" if len(tables) > MAX_CONNECTION_TABLES else ""
+        return f'"{c["name"]}":\n' + "\n".join(f"  {line}" for line in sqlconsole.schema_as_text(tables[:MAX_CONNECTION_TABLES]).splitlines()) + more
+
+    rows = await _pg_connections(org_id)
+    if not rows:
+        return "(none)"
+    return "\n".join(await asyncio.gather(*(describe(c) for c in rows)))
+
+
+async def _query(org_id: int, sql: str, source: str | None) -> tuple[dict, str | None]:
+    """Run the analyst's SQL on BenchMonster data or a named connection. Returns (result, source name)."""
+    if not source or source.strip().lower() in ("benchmonster", "benchmonster data", "default"):
+        return await sqlconsole.run(org_id, sql, max_rows=ROWS_FOR_MODEL), None
+    match = next((c for c in await _pg_connections(org_id) if c["name"].lower() == source.strip().lower()), None)
+    if not match:
+        raise sqlconsole.QueryError(f"no connected database named {source!r}")
+    _, cfg, sec = await linked.load_connection(org_id, match["id"])
+    try:
+        return await conns.pg_query(cfg, sec, sql, ROWS_FOR_MODEL), match["name"]
+    except HTTPException as e:
+        raise sqlconsole.QueryError(e.detail)
 
 
 async def _run_tool(scope: Scope, label: str, name: str, args: dict) -> tuple[str, dict]:
     """Returns (text for the model, record for the UI)."""
     if name == "run_sql":
         sql = args.get("sql", "")
+        source = args.get("source")
         try:
-            res = await sqlconsole.run(scope.org_id, sql, max_rows=ROWS_FOR_MODEL)
+            res, source_name = await _query(scope.org_id, sql, source)
         except sqlconsole.QueryError as e:
-            return f"ERROR: {e}", {"tool": name, "sql": sql, "error": str(e)}
+            return f"ERROR: {e}", {"tool": name, "sql": sql, "source": source, "error": str(e)}
         cols = [c["name"] for c in res["columns"]]
         rows = [[_fmt(v) for v in r] for r in res["rows"]]
         text = json.dumps({"columns": cols, "rows": rows, "truncated": res["truncated"]})
-        return text, {"tool": name, "sql": sql, "columns": cols, "rows": rows, "truncated": res["truncated"]}
+        return text, {"tool": name, "sql": sql, "source": source_name, "columns": cols, "rows": rows,
+                      "truncated": res["truncated"]}
     if name == "save_finding":
         finding = args.get("finding", "").strip()
         meta = {k: v for k, v in (("run_id", scope.run_id), ("profile_id", scope.profile_id)) if v}
@@ -266,6 +326,7 @@ async def chat(scope: Scope, user_message: str) -> dict:
 
     ep = providers.vultr_endpoint(settings.assistant_model)
     tool_records: list[dict] = []
+    drafts: list[str] = []  # answer text the model wrote alongside tool calls
     reply = None
     for _ in range(MAX_TOOL_ROUNDS):
         resp = await providers.complete(ep, messages, tools=TOOLS, max_tokens=4096, temperature=0.2)
@@ -274,6 +335,8 @@ async def chat(scope: Scope, user_message: str) -> dict:
         if not calls:
             reply = (msg.get("content") or "").strip()
             break
+        if (msg.get("content") or "").strip():
+            drafts.append(msg["content"].strip())
         messages.append({"role": "assistant", "content": msg.get("content") or "", "tool_calls": calls})
         for call in calls:
             try:
@@ -283,6 +346,11 @@ async def chat(scope: Scope, user_message: str) -> dict:
             text, record = await _run_tool(scope, label, call["function"]["name"], call_args)
             tool_records.append(record)
             messages.append({"role": "tool", "tool_call_id": call["id"], "content": text})
+    # Keep a substantial answer written next to a tool call (e.g. before save_finding) if the
+    # final message is only a short sign-off.
+    longest = max(drafts, key=len, default="")
+    if len(longest) > 200 and len(reply or "") < len(longest) / 2:
+        reply = f"{longest}\n\n{reply}".strip() if reply else longest
     if not reply:
         reply = "I couldn't reach an answer within my tool-call budget. Try a narrower question."
 

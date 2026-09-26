@@ -52,7 +52,12 @@ const SHORT_TYPES: Record<string, string> = {
 };
 const shortType = (t: string) => SHORT_TYPES[t] ?? t;
 
-export function SqlConsole({ sql, onSqlChange }: { sql: string; onSqlChange: (s: string) => void }) {
+export function SqlConsole({ sql, onSqlChange, registerSourceSwitch }: {
+  sql: string;
+  onSqlChange: (s: string) => void;
+  /** Hands the parent a way to point the console at a source by name (null = BenchMonster data). */
+  registerSourceSwitch?: (fn: (name: string | null) => void) => void;
+}) {
   const [schema, setSchema] = useState<SchemaTable[]>([]);
   const [result, setResult] = useState<QueryResult | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -64,9 +69,13 @@ export function SqlConsole({ sql, onSqlChange }: { sql: string; onSqlChange: (s:
   const sourceConn = pgConns.find((c) => c.id === source);
   // Latest editor text, so a slow schema load doesn't overwrite what was typed meanwhile.
   const sqlRef = useRef(sql);
+  const pgConnsRef = useRef<Connection[]>([]);
+  const sourceRef = useRef<number | null>(null);
   useEffect(() => {
     sqlRef.current = sql;
-  }, [sql]);
+    pgConnsRef.current = pgConns;
+    sourceRef.current = source;
+  }, [sql, pgConns, source]);
 
   // Saved queries (shared across the org). `active` is the one loaded in the editor.
   // "Save as…" always creates a new query; only "Update" overwrites the active one.
@@ -171,6 +180,12 @@ export function SqlConsole({ sql, onSqlChange }: { sql: string; onSqlChange: (s:
     refreshSaved();
   };
 
+  useEffect(() => {
+    registerSourceSwitch?.((name) => {
+      const id = name ? (pgConnsRef.current.find((c) => c.name.toLowerCase() === name.toLowerCase())?.id ?? null) : null;
+      if (id !== sourceRef.current) switchSource(id, false);
+    });
+  });
   useEffect(() => {
     api.schema().then(setSchema);
     api.savedQueries().then(setSaved);

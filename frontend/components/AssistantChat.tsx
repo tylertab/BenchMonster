@@ -34,7 +34,7 @@ function Markdown({ text }: { text: string }) {
   );
 }
 
-function ToolCallView({ call, onOpenSql }: { call: ToolCall; onOpenSql: (sql: string) => void }) {
+function ToolCallView({ call, onOpenSql }: { call: ToolCall; onOpenSql: (sql: string, source?: string | null) => void }) {
   const [open, setOpen] = useState(false);
   if (call.tool === "save_finding") {
     return (
@@ -47,6 +47,7 @@ function ToolCallView({ call, onOpenSql }: { call: ToolCall; onOpenSql: (sql: st
     <div className="rounded-md border border-line bg-surface-2/50 text-xs">
       <button type="button" onClick={() => setOpen(!open)} className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-ink-2 hover:text-ink">
         <span>{open ? "▾" : "▸"}</span>
+        {call.source && <span className="shrink-0 rounded bg-accent/10 px-1.5 text-[11px] text-accent">⇄ {call.source}</span>}
         <span className="truncate font-mono">{call.sql.replace(/\s+/g, " ")}</span>
         {call.error ? <span className="ml-auto shrink-0 text-critical">✕ error</span> : <span className="ml-auto shrink-0 text-muted">{call.rows?.length ?? 0} rows</span>}
       </button>
@@ -55,7 +56,7 @@ function ToolCallView({ call, onOpenSql }: { call: ToolCall; onOpenSql: (sql: st
           <pre className="overflow-x-auto whitespace-pre-wrap font-mono">{call.sql}</pre>
           {call.error ? <p className="text-critical">{call.error}</p> : call.columns && <ResultTable columns={call.columns} rows={call.rows ?? []} />}
           <div className="flex gap-2">
-            <Button variant="secondary" onClick={() => onOpenSql(call.sql)}>
+            <Button variant="secondary" onClick={() => onOpenSql(call.sql, call.source ?? null)}>
               Open in SQL console
             </Button>
             {call.columns && (
@@ -78,7 +79,7 @@ export function AssistantChat({
   setMessages,
 }: {
   scope: BMQueryScope;
-  onOpenSql: (sql: string) => void;
+  onOpenSql: (sql: string, source?: string | null) => void;
   headerActions?: ReactNode;
   messages: ChatMessage[];
   setMessages: React.Dispatch<React.SetStateAction<ChatMessage[]>>;
