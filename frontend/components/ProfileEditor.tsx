@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { DatasetPicker, ExpectedOutputCard, guessExpected, InputFileCard, type InputSet, inputSetProblems, toRef } from "@/components/InputSetEditor";
+import { ExpectedOutputCard, guessExpected, type InputSet, inputSetProblems, toRef } from "@/components/InputSetEditor";
 import { DEFAULT_PARAMS, ModelPicker } from "@/components/ModelPicker";
 import { buildScoringConfig, DEFAULT_SCORING, METHODS, OutputProcessing, ScoringConfig, scoringStateFrom, type ScoringState } from "@/components/ScoringConfig";
 import { VariableChips } from "@/components/TemplateView";
@@ -119,8 +119,10 @@ export function ProfileEditor({
     ),
   );
 
+  // A profile has at most one record source; every per-record variable reads it.
   const [sets, setSets] = useState<InputSet[]>([]);
-  const [adding, setAdding] = useState(false);
+  const [dropped, setDropped] = useState<string[]>([]);
+  const [uploading, setUploading] = useState(false);
   const [expectedText, setExpectedText] = useState(initial?.config.expected_text ?? "");
   const [preview, setPreview] = useState<DatasetDetail | null>(null);
 
@@ -148,9 +150,11 @@ export function ProfileEditor({
       const byId = new Map(ds.map((d) => [d.id, d]));
       if (initial) {
         setMissing(initial.config.datasets.filter((r) => !byId.has(r.dataset_id) || (r.expected_dataset_id && !byId.has(r.expected_dataset_id))).length);
+        const usable = initial.config.datasets.filter((r) => byId.has(r.dataset_id) && (!r.expected_dataset_id || byId.has(r.expected_dataset_id)));
+        setDropped(usable.slice(1).map((r) => byId.get(r.dataset_id)!.filename));
         setSets(
-          initial.config.datasets
-            .filter((r) => byId.has(r.dataset_id) && (!r.expected_dataset_id || byId.has(r.expected_dataset_id)))
+          usable
+            .slice(0, 1)
             .map((r) => ({
               key: newKey(),
               input: byId.get(r.dataset_id)!,
@@ -182,6 +186,26 @@ export function ProfileEditor({
   const perRecord = recordVars.length > 0;
   const resolved = sets.map((s) => ({ ...s, mapping: resolveMapping(fieldVars, wholeVars, s.input.columns, s.mapping) }));
   const updateSet = (key: string, next: InputSet) => setSets((cur) => cur.map((s) => (s.key === key ? next : s)));
+  const recordSet = resolved[0] ?? null;
+  // Choosing a file for any per-record variable sets the record source for all of them.
+  const chooseRecordFile = (id: number) => {
+    const d = datasets?.find((x) => x.id === id);
+    if (!d || recordSet?.input.id === id) return;
+    setSets([newInputSet(d)]);
+    setDropped([]);
+  };
+  const setColumn = (v: string, col: string) => recordSet && updateSet(recordSet.key, { ...recordSet, mapping: { ...recordSet.mapping, [v]: col } });
+  const uploadFile = async (files: FileList) => {
+    setUploading(true);
+    setError(null);
+    try {
+      for (const f of Array.from(files)) addUploaded(await api.uploadDataset(f));
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setUploading(false);
+    }
+  };
   const addUploaded = (d: Dataset) => setDatasets((cur) => [d, ...(cur ?? []).filter((x) => x.id !== d.id)]);
   const byId = new Map((datasets ?? []).map((d) => [d.id, d]));
 
@@ -209,10 +233,10 @@ export function ProfileEditor({
   if (variables.length === 0) problems.push("The template needs at least one {{variable}}.");
   for (const v of variables) if (sourceOf(v) === "dataset" && !inlines[v]?.datasetId) problems.push(`Choose the dataset to inline for {{${v}}}.`);
   if (perRecord) {
-    if (resolved.length === 0) problems.push(`Add a record source for ${recordVars.map((v) => `{{${v}}}`).join(", ")}.`);
+    if (resolved.length === 0) problems.push(`Choose the file for ${recordVars.map((v) => `{{${v}}}`).join(", ")}.`);
     for (const s of resolved) {
       const unmapped = fieldVars.filter((v) => !s.mapping[v]);
-      if (unmapped.length) problems.push(`${s.input.filename}: choose columns for ${unmapped.map((v) => `{{${v}}}`).join(", ")}.`);
+      if (unmapped.length) problems.push(`Choose the column for ${unmapped.map((v) => `{{${v}}}`).join(", ")}.`);
       problems.push(...inputSetProblems(s, methodInfo.needsExpected, methodInfo.label));
     }
   } else if (methodInfo.needsExpected && !expectedText.trim()) {
@@ -360,7 +384,17 @@ export function ProfileEditor({
         </div>
       </Section>
 
-      <Section n={3} title="Inputs" subtitle="where each variable's value comes from">
+      <Section
+        n={3}
+        title="Inputs"
+        subtitle="where each variable's value comes from"
+        actions={
+          <label className="cursor-pointer text-xs text-accent hover:underline">
+            <input type="file" multiple accept=".csv,.jsonl,.ndjson,.json" className="sr-only" onChange={(e) => e.target.files?.length && uploadFile(e.target.files)} />
+            {uploading ? "Uploading…" : "+ Upload file"}
+          </label>
+        }
+      >
         {variables.length === 0 ? (
           <p className="text-sm text-muted">Write the prompt first; each {"{{variable}}"} appears here to connect.</p>
         ) : (
@@ -380,6 +414,40 @@ export function ProfileEditor({
                           </option>
                         ))}
                       </select>
+                      {(src === "field" || src === "record") && (
+                        <>
+                          <select
+                            className={`${compactInputClass} max-w-64 ${recordSet ? "" : "border-critical"}`}
+                            value={recordSet?.input.id ?? ""}
+                            onChange={(e) => chooseRecordFile(Number(e.target.value))}
+                            aria-label={`File for ${v}`}
+                          >
+                            <option value="">choose file…</option>
+                            {datasets.map((d) => (
+                              <option key={d.id} value={d.id}>
+                                {d.filename} ({d.row_count} records)
+                              </option>
+                            ))}
+                          </select>
+                          {src === "field" && recordSet && (
+                            <select
+                              className={`${compactInputClass} ${recordSet.mapping[v] ? "" : "border-critical"}`}
+                              value={recordSet.mapping[v] ?? ""}
+                              onChange={(e) => setColumn(v, e.target.value)}
+                              aria-label={`Column for ${v}`}
+                            >
+                              <option value="">choose column…</option>
+                              {recordSet.input.columns.map((c) => (
+                                <option key={c} value={c}>
+                                  {c}
+                                  {recordSet.input.schema?.properties?.[c]?.type ? ` (${recordSet.input.schema.properties[c].type})` : ""}
+                                </option>
+                              ))}
+                            </select>
+                          )}
+                          {src === "record" && recordSet && <span className="text-xs text-ink-2">all {recordSet.input.columns.length} columns as JSON</span>}
+                        </>
+                      )}
                       {src === "dataset" && (
                         <>
                           <select
@@ -418,49 +486,27 @@ export function ProfileEditor({
             </div>
 
             {perRecord ? (
-              <div className="space-y-2">
-                <div>
-                  <h3 className="text-sm font-medium">Record sources</h3>
-                  <p className="text-xs text-ink-2">
-                    Files whose rows are looped over: <strong>each record becomes one prompt</strong>, and{" "}
-                    {recordVars.map((v) => `{{${v}}}`).join(", ")} {recordVars.length === 1 ? "is" : "are"} read from the current record. Add several files to
-                    run them all in one benchmark (e.g. US and EU orders); their column names can differ, so each file says which column feeds each variable.
+              <div className="space-y-1 rounded-md bg-surface-2/60 px-3 py-2 text-sm text-ink-2">
+                {recordSet ? (
+                  <p>
+                    Each of the <strong>{recordSet.input.row_count.toLocaleString()} records</strong> in <span className="font-mono">{recordSet.input.filename}</span> becomes one
+                    prompt; {recordVars.map((v) => `{{${v}}}`).join(", ")} {recordVars.length === 1 ? "is" : "are"} read from the current record.
                   </p>
-                </div>
-                {missing > 0 && (
-                  <p className="rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-sm">
-                    {missing} record source{missing === 1 ? " uses" : "s use"} a deleted dataset and {missing === 1 ? "is" : "are"} left out.
+                ) : (
+                  <p>Choose the file that {recordVars.map((v) => `{{${v}}}`).join(", ")} {recordVars.length === 1 ? "reads" : "read"} from; each of its records becomes one prompt.</p>
+                )}
+                {missing > 0 && <p className="text-warning">A dataset this version used was deleted; choose a file again.</p>}
+                {dropped.length > 0 && (
+                  <p className="text-warning">
+                    This version also ran {dropped.join(", ")}. Profiles now use one record file; saving keeps only {recordSet?.input.filename}. Duplicate the profile to keep a
+                    separate version for {dropped.join(", ")}.
                   </p>
                 )}
-                {resolved.map((s) => (
-                  <InputFileCard
-                    key={s.key}
-                    set={s}
-                    variables={fieldVars}
-                    wholeRecordVars={wholeVars}
-                    onChange={(next) => updateSet(s.key, next)}
-                    onRemove={() => setSets((cur) => cur.filter((x) => x.key !== s.key))}
-                  />
-                ))}
-                {adding ? (
-                  <DatasetPicker
-                    title="Choose a file of records"
-                    datasets={datasets}
-                    onPick={(d) => {
-                      setSets((cur) => [...cur, newInputSet(d)]);
-                      setAdding(false);
-                    }}
-                    onUploaded={(d) => {
-                      addUploaded(d);
-                      setSets((cur) => [...cur, newInputSet(d)]);
-                      setAdding(false);
-                    }}
-                    onCancel={() => setAdding(false)}
-                  />
-                ) : (
-                  <Button type="button" variant="secondary" onClick={() => setAdding(true)}>
-                    + Add record source
-                  </Button>
+                {recordSet && wholeVars.length > 0 && recordSet.expectedSource === "column" && recordSet.expectedColumn && (
+                  <p className="text-critical">
+                    The whole record includes the expected column <code>{recordSet.expectedColumn}</code>, so the answer would be in the prompt. Put expected outputs in a
+                    separate file, or use record fields instead.
+                  </p>
                 )}
               </div>
             ) : (
@@ -481,7 +527,7 @@ export function ProfileEditor({
                 <Link href="/datasets" className="text-accent underline">
                   Datasets
                 </Link>{" "}
-                page, or with + Add record source.
+                page, or with + Upload file above.
               </p>
             )}
           </div>
@@ -494,7 +540,7 @@ export function ProfileEditor({
             <h3 className="text-sm font-medium">Expected values</h3>
             {perRecord ? (
               resolved.length === 0 ? (
-                <p className="text-xs text-muted">Add a record source first; each gets its own expected outputs.</p>
+                <p className="text-xs text-muted">Choose the record file in Inputs first.</p>
               ) : (
                 resolved.map((s) => <ExpectedOutputCard key={s.key} set={s} datasets={datasets} onChange={(next) => updateSet(s.key, next)} onUploaded={addUploaded} />)
               )

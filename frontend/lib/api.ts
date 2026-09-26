@@ -434,6 +434,7 @@ export const api = {
   createProfile: (body: { name: string; description?: string; config: ProfileConfig; note?: string }) => post<Profile>("/profiles", body),
   updateProfileMeta: (id: number, body: { name: string; description?: string | null }) => patch<{ ok: boolean }>(`/profiles/${id}`, body),
   deleteProfile: (id: number) => del<{ ok: boolean }>(`/profiles/${id}`),
+  duplicateProfile: (id: number, body: { name?: string; version?: number } = {}) => post<Profile>(`/profiles/${id}/duplicate`, body),
   saveVersion: (id: number, config: ProfileConfig, note?: string) =>
     post<{ version: number; changed: ProfileSection[] }>(`/profiles/${id}/versions`, { config, note }),
   restoreVersion: (id: number, version: number) => post<{ version: number }>(`/profiles/${id}/versions/${version}/restore`, {}),

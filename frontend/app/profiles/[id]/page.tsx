@@ -52,6 +52,18 @@ function ProfileView() {
     }
   };
 
+  const duplicate = async () => {
+    if (!v) return;
+    const name = window.prompt(`Name for the copy of ${profile.name} v${v.version}`, `${profile.name} (copy)`);
+    if (!name?.trim()) return;
+    try {
+      const copy = await api.duplicateProfile(profile.id, { name: name.trim(), version: v.version });
+      router.push(`/profiles/${copy.id}/edit`);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+
   const remove = async () => {
     if (!window.confirm(`Delete "${profile.name}" and its version history? Its runs are kept.`)) return;
     await api.deleteProfile(profile.id);
@@ -78,6 +90,9 @@ function ProfileView() {
           <Link href={`/profiles/${id}/edit`} className="rounded-md border border-line bg-surface px-3 py-1.5 text-sm font-medium hover:bg-surface-2">
             Edit
           </Link>
+          <Button variant="secondary" onClick={duplicate} disabled={!v} title="Copy this version into a new profile, e.g. to make an EU variant of a US benchmark">
+            Duplicate
+          </Button>
           <Link href={`/bmquery?profile=${id}`} className="rounded-md border border-accent/50 bg-accent/5 px-3 py-1.5 text-sm font-medium text-accent hover:bg-accent/10">
             Analyze this benchmark with BMQuery
           </Link>

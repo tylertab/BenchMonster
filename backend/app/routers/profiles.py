@@ -215,6 +215,27 @@ async def rename_profile(profile_id: int, body: ProfileMetaIn, ctx: auth.Ctx = D
     return {"ok": True}
 
 
+class DuplicateIn(BaseModel):
+    name: str | None = Field(None, max_length=200)
+    version: int | None = None  # default: current version
+
+
+@router.post("/{profile_id}/duplicate")
+async def duplicate_profile(profile_id: int, body: DuplicateIn, ctx: auth.Ctx = Depends(auth.current_ctx)):
+    """Copy a profile version into a new profile (v1), e.g. to make a US and an EU variant."""
+    p = await _profile(profile_id, ctx.org_id)
+    version = body.version or p["current_version"]
+    cfg = _as_config(await _version(profile_id, version))
+    prepared = await runconfig.prepare(ctx.org_id, cfg, render=False)
+    async with db.pool().acquire() as conn, conn.transaction():
+        new_id = await conn.fetchval(
+            "insert into benchmark_profiles (org_id, name, description, created_by) values ($1, $2, $3, $4) returning id",
+            ctx.org_id, (body.name or "").strip() or f"{p['name']} (copy)", p["description"], ctx.user_id,
+        )
+        await _insert_version(conn, new_id, cfg, prepared.datasets, f"Duplicated from {p['name']} v{version}", ctx.user_id)
+    return await get_profile(new_id, ctx)
+
+
 @router.delete("/{profile_id}")
 async def delete_profile(profile_id: int, ctx: auth.Ctx = Depends(auth.current_ctx)):
     """Runs are kept (they have their own snapshot); they just lose the profile link."""
