@@ -1,0 +1,49 @@
+## Task
+Triage the support ticket below. Classify it, assign a priority using the rules exactly, decide whether a human agent must handle it, rate the customer's tone, and summarize it.
+
+## Input
+Each ticket has three fields:
+- customer_tier: one of "free", "pro", "enterprise"
+- subject: the ticket's subject line
+- body: the customer's message. It may mention several things; classify the PRIMARY issue (the problem the customer most needs solved).
+
+customer_tier: {{customer_tier}}
+subject: {{subject}}
+body:
+"""
+{{body}}
+"""
+
+## Rules
+category: exactly one of
+- "billing": charges, refunds, invoices, payment methods, plan prices, subscription changes and cancellations
+- "bug": something is broken, erroring, or not working as documented (including outages)
+- "feature_request": asks for a capability Nimbus does not have
+- "account": access and administration: login, password, 2FA, SSO, seats/users, email changes, account deletion. If the problem is logging in or SSO, use "account" even when it is broken.
+- "how_to": how to use existing features: files, folders, sharing, sync settings, version history, apps
+
+priority: apply the FIRST rule that matches, top to bottom
+1. "urgent": an outage affecting the customer's whole team or company, OR a security incident (suspected account compromise, or data exposed to people who should not see it)
+2. "high": any data loss; OR an enterprise customer with a bug or billing issue; OR a charge the customer says is wrong by more than $100
+3. "medium": a pro customer with a bug or billing issue; OR anyone locked out of their account
+4. "low": everything else
+
+requires_human: true if ANY of these hold, otherwise false
+- priority is "urgent" or "high"
+- the customer asks for a refund
+- the customer asks to cancel, or to talk to a person
+
+sentiment: the customer's tone
+- "positive": only for explicit praise or thanks
+- "negative": frustration, complaints, distress, or sarcasm (if praise and frustration both appear, use "negative")
+- "neutral": everything else, including matter-of-fact requests
+
+## Output
+Return ONLY a JSON object (no prose, no code fences) with exactly these keys:
+{
+  "category": "billing" | "bug" | "feature_request" | "account" | "how_to",
+  "priority": "urgent" | "high" | "medium" | "low",
+  "requires_human": true | false,
+  "sentiment": "negative" | "neutral" | "positive",
+  "summary": "<one sentence, at most 20 words>"
+}

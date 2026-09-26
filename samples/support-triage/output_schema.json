@@ -1,0 +1,11 @@
+{
+  "type": "object",
+  "required": ["category", "priority", "requires_human", "sentiment", "summary"],
+  "properties": {
+    "category": {"enum": ["billing", "bug", "feature_request", "account", "how_to"]},
+    "priority": {"enum": ["urgent", "high", "medium", "low"]},
+    "requires_human": {"type": "boolean"},
+    "sentiment": {"enum": ["negative", "neutral", "positive"]},
+    "summary": {"type": "string"}
+  }
+}
