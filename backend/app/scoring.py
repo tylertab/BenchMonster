@@ -6,6 +6,8 @@ Methods (benchmark.scoring_method) and their scoring_config keys:
   regex        pattern (defaults to the case's expected value)
   numeric      tolerance (abs, default 1e-6), rel_tolerance (default 0)
   json_schema  schema (required), match_expected (false): also require equality with expected JSON
+  json_fields  fields (default: every key in expected), schema (optional), pass_threshold (1.0):
+               score = fraction of fields whose value matches the expected JSON
   llm_judge    rubric (optional), pass_threshold (0.7)
 """
 
@@ -19,7 +21,7 @@ import jsonschema
 from . import providers
 from .config import settings
 
-METHODS = ("exact", "contains", "regex", "numeric", "json_schema", "llm_judge")
+METHODS = ("exact", "contains", "regex", "numeric", "json_schema", "json_fields", "llm_judge")
 
 _NUMBER = re.compile(r"-?\d[\d,]*\.?\d*(?:[eE][-+]?\d+)?")
 _FENCE = re.compile(r"^```(?:json)?\s*|\s*```$", re.MULTILINE)
@@ -52,6 +54,33 @@ def _parse_json(text: str):
 def _last_number(text: str) -> float | None:
     nums = _NUMBER.findall(text)
     return float(nums[-1].replace(",", "")) if nums else None
+
+
+_MISSING = object()
+
+
+def _get(data, path: str):
+    """Dotted-path lookup: 'customer.tier' -> data['customer']['tier']."""
+    for part in path.split("."):
+        if not isinstance(data, dict) or part not in data:
+            return _MISSING
+        data = data[part]
+    return data
+
+
+def _norm(v):
+    if isinstance(v, str):
+        return " ".join(v.split()).casefold()
+    if isinstance(v, bool) or v is None:
+        return v
+    if isinstance(v, (int, float)):
+        return float(v)
+    if isinstance(v, list):
+        # Order-insensitive: tags/labels lists rarely have meaningful order.
+        return sorted((_norm(x) for x in v), key=repr)
+    if isinstance(v, dict):
+        return {k: _norm(x) for k, x in v.items()}
+    return v
 
 
 def _binary(ok: bool, why: str | None = None) -> Score:
@@ -93,6 +122,32 @@ def score_rule_based(method: str, cfg: dict, expected: str | None, output: str) 
         if cfg.get("match_expected") and expected:
             return _binary(data == _parse_json(expected), "compared to expected JSON")
         return _binary(True)
+
+    if method == "json_fields":
+        try:
+            data = _parse_json(output)
+        except (json.JSONDecodeError, ValueError):
+            return _binary(False, "output is not valid JSON")
+        if cfg.get("schema"):
+            try:
+                jsonschema.validate(data, cfg["schema"])
+            except jsonschema.ValidationError as e:
+                return _binary(False, f"schema: {e.message}")
+        try:
+            want = _parse_json(expected)
+        except (json.JSONDecodeError, ValueError):
+            return _binary(False, "expected value is not valid JSON")
+        fields = cfg.get("fields") or (list(want) if isinstance(want, dict) else [])
+        if not fields:
+            return _binary(False, "no fields to compare")
+        wrong = []
+        for f in fields:
+            got, exp = _get(data, f), _get(want, f)
+            if got is _MISSING or _norm(got) != _norm(exp):
+                wrong.append(f"{f}: got {'(missing)' if got is _MISSING else json.dumps(got)}, expected {json.dumps(exp)}")
+        score = (len(fields) - len(wrong)) / len(fields)
+        why = f"{len(fields) - len(wrong)}/{len(fields)} fields match" + (f"; {'; '.join(wrong[:4])}" if wrong else "")
+        return Score(score, score >= float(cfg.get("pass_threshold", 1.0)), why)
 
     raise ValueError(f"unknown scoring method {method!r}")
 

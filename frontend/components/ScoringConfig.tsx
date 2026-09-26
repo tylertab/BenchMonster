@@ -9,6 +9,7 @@ export const METHODS: { value: ScoringMethod; label: string; description: string
   { value: "numeric", label: "Numeric", description: "Last number in the output matches the expected number within a tolerance.", needsExpected: true },
   { value: "regex", label: "Regex", description: "Output matches a pattern (a shared one, or each row's expected value).", needsExpected: false },
   { value: "json_schema", label: "JSON schema", description: "Output is valid JSON matching a schema; optionally equal to expected JSON.", needsExpected: false },
+  { value: "json_fields", label: "JSON field match", description: "Parses JSON output and scores the fraction of fields that match the expected JSON.", needsExpected: true },
   { value: "llm_judge", label: "LLM judge", description: "A judge model grades 0–10 against the expected answer and your rubric.", needsExpected: false },
 ];
 
@@ -21,6 +22,9 @@ export type ScoringState = {
   match_expected: boolean;
   rubric: string;
   pass_threshold: string;
+  fields: string; // json_fields: comma-separated paths; empty = every expected key
+  fields_schema: string; // json_fields: optional schema checked first
+  fields_threshold: string;
 };
 
 export const DEFAULT_SCORING: ScoringState = {
@@ -32,6 +36,9 @@ export const DEFAULT_SCORING: ScoringState = {
   match_expected: false,
   rubric: "",
   pass_threshold: "0.7",
+  fields: "",
+  fields_schema: "",
+  fields_threshold: "1",
 };
 
 /** Build the backend scoring_config; throws with a user-facing message on bad input. */
@@ -51,6 +58,19 @@ export function buildScoringConfig(method: ScoringMethod, s: ScoringState): Reco
       } catch {
         throw new Error("JSON schema is not valid JSON");
       }
+    case "json_fields": {
+      const cfg: Record<string, unknown> = { pass_threshold: Number(s.fields_threshold) || 1 };
+      const fields = s.fields.split(",").map((f) => f.trim()).filter(Boolean);
+      if (fields.length) cfg.fields = fields;
+      if (s.fields_schema.trim()) {
+        try {
+          cfg.schema = JSON.parse(s.fields_schema);
+        } catch {
+          throw new Error("JSON schema is not valid JSON");
+        }
+      }
+      return cfg;
+    }
     case "llm_judge":
       return { rubric: s.rubric || undefined, pass_threshold: Number(s.pass_threshold) || 0.7 };
   }
@@ -101,6 +121,23 @@ export function ScoringConfig({ method, state, onChange }: { method: ScoringMeth
           </label>
         </div>
       );
+    case "json_fields":
+      return (
+        <div className="space-y-3">
+          <div className="grid grid-cols-[1fr_12rem] gap-3">
+            <Field label="Fields to compare" hint="Comma-separated; dotted paths reach nested keys. Empty = every key in the expected JSON.">
+              <input className={`${inputClass} font-mono`} value={state.fields} onChange={(e) => set("fields", e.target.value)} placeholder="category, priority, customer.tier" />
+            </Field>
+            <Field label="Pass threshold" hint="Fraction of fields (1 = all)">
+              <input type="number" step="0.05" min="0" max="1" className={inputClass} value={state.fields_threshold} onChange={(e) => set("fields_threshold", e.target.value)} />
+            </Field>
+          </div>
+          <Field label="JSON schema (optional)" hint="If set, output must validate first or it scores 0">
+            <textarea rows={5} className={`${inputClass} font-mono text-xs`} value={state.fields_schema} onChange={(e) => set("fields_schema", e.target.value)} placeholder='{"type": "object", "required": ["category", "priority"]}' />
+          </Field>
+          <p className="text-xs text-muted">Strings ignore case and extra whitespace; lists ignore order.</p>
+        </div>
+      );
     case "llm_judge":
       return (
         <div className="space-y-3">
@@ -122,8 +159,14 @@ export function ScoringConfig({ method, state, onChange }: { method: ScoringMeth
 }
 
 /** Inverse of buildScoringConfig: prefill the form from a stored config (clone & edit). */
-export function scoringStateFrom(cfg: Record<string, unknown>): ScoringState {
+export function scoringStateFrom(cfg: Record<string, unknown>, method?: ScoringMethod): ScoringState {
   const s = { ...DEFAULT_SCORING };
+  if (method === "json_fields") {
+    if (Array.isArray(cfg.fields)) s.fields = cfg.fields.join(", ");
+    if (cfg.schema != null) s.fields_schema = JSON.stringify(cfg.schema, null, 2);
+    if (cfg.pass_threshold != null) s.fields_threshold = String(cfg.pass_threshold);
+    return s;
+  }
   if (typeof cfg.case_sensitive === "boolean") s.case_sensitive = cfg.case_sensitive;
   if (typeof cfg.pattern === "string") s.pattern = cfg.pattern;
   if (cfg.tolerance != null) s.tolerance = String(cfg.tolerance);

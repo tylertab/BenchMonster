@@ -85,7 +85,7 @@ function NewRun() {
             .map((d) => ({ dataset: byId.get(d.dataset_id!)!, mapping: d.mapping, expected: d.expected_column ?? "" })),
         );
         setMethod(cfg.scoring_method);
-        setScoring(scoringStateFrom(cfg.scoring_config));
+        setScoring(scoringStateFrom(cfg.scoring_config, cfg.scoring_method));
         const models = await api.models();
         const available = new Set(models.map((m) => m.id));
         setModelIds(cfg.model_ids.filter((id) => available.has(id)));

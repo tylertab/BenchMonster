@@ -13,7 +13,7 @@ from .. import auth, db, runner, scoring, templates
 router = APIRouter(prefix="/api/runs", tags=["runs"])
 
 MAX_INPUTS = 10_000
-NEEDS_EXPECTED = {"exact", "contains", "numeric"}
+NEEDS_EXPECTED = {"exact", "contains", "numeric", "json_fields"}
 
 
 # --- Create -----------------------------------------------------------------

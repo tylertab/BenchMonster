@@ -36,3 +36,29 @@ def test_json_schema_failures_and_match_expected():
     assert not s("json_schema", {"schema": schema}, None, "not json").passed
     assert s("json_schema", {"schema": {}, "match_expected": True}, '{"a": 1}', '{"a": 1}').passed
     assert not s("json_schema", {"schema": {}, "match_expected": True}, '{"a": 1}', '{"a": 2}').passed
+
+
+EXPECTED = '{"category": "billing", "priority": "high", "requires_human": true, "tags": ["refund", "invoice"]}'
+
+
+def test_json_fields_partial_credit_and_rationale():
+    out = '```json\n{"category": "Billing", "priority": "medium", "requires_human": true, "tags": ["invoice", "refund"], "summary": "x"}\n```'
+    r = s("json_fields", {}, EXPECTED, out)
+    assert r.score == 0.75 and not r.passed
+    assert 'priority: got "medium", expected "high"' in r.rationale
+
+
+def test_json_fields_selected_fields_threshold_and_nested():
+    out = '{"category": "billing", "priority": "medium", "customer": {"tier": "pro"}}'
+    exp = '{"category": "billing", "priority": "high", "customer": {"tier": "pro"}}'
+    r = s("json_fields", {"fields": ["category", "customer.tier"]}, exp, out)
+    assert r.score == 1.0 and r.passed
+    r = s("json_fields", {"pass_threshold": 0.6}, exp, out)
+    assert round(r.score, 2) == 0.67 and r.passed
+
+
+def test_json_fields_invalid_and_schema():
+    assert not s("json_fields", {}, EXPECTED, "not json").passed
+    schema = {"type": "object", "required": ["summary"]}
+    r = s("json_fields", {"schema": schema}, EXPECTED, '{"category": "billing"}')
+    assert r.score == 0 and "schema" in r.rationale

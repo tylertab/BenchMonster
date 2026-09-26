@@ -13,7 +13,7 @@ export type Model = {
   context_length: number | null;
 };
 
-export type ScoringMethod = "exact" | "contains" | "regex" | "numeric" | "json_schema" | "llm_judge";
+export type ScoringMethod = "exact" | "contains" | "regex" | "numeric" | "json_schema" | "json_fields" | "llm_judge";
 export type RunStatus = "queued" | "running" | "completed" | "failed";
 export type RunParams = { max_tokens: number; temperature: number; concurrency: number };
 
