@@ -372,6 +372,15 @@ export function ProfileEditor({
     if (sourceOf(v) === "dataset" && inlines[v]?.datasetId) bindings[v] = { type: "dataset", dataset_id: inlines[v].datasetId!, format: inlines[v].format };
   }
 
+  // Does the expected-output column reach the prompt? Through the record JSON (unless it's
+  // left out under Fields and parsing), or a {{field}} variable reading it directly.
+  const expectedCol = recordSet?.expectedSource === "column" ? recordSet.expectedColumn : "";
+  const answerLeak: "record" | string | null = !expectedCol
+    ? null
+    : wholeVars.length > 0 && (recordSet!.fields === null || recordSet!.fields.some((f) => f.column === expectedCol))
+      ? "record"
+      : (fieldVars.find((v) => recordSet!.mapping[v] === expectedCol) ?? null);
+
   const methodInfo = METHODS.find((m) => m.value === method)!;
   const problems: string[] = [];
   if (!name.trim()) problems.push("Name the benchmark profile.");
@@ -775,10 +784,18 @@ export function ProfileEditor({
                     separate version for {dropped.join(", ")}.
                   </p>
                 )}
-                {recordSet && wholeVars.length > 0 && recordSet.expectedSource === "column" && recordSet.expectedColumn && (
+                {answerLeak && (
                   <p className="text-critical">
-                    The record includes the expected field <code>{recordSet.expectedColumn}</code>, so the answer would be in the prompt. Put expected outputs in a
-                    separate file, or use individual fields instead.
+                    {answerLeak === "record" ? (
+                      <>
+                        The whole-record variable includes <code>{recordSet!.expectedColumn}</code>, the expected output, so the answer would be in the prompt. Uncheck it
+                        under Fields and parsing.
+                      </>
+                    ) : (
+                      <>
+                        {`{{${answerLeak}}}`} reads <code>{recordSet!.expectedColumn}</code>, the expected output, so the answer would be in the prompt.
+                      </>
+                    )}
                   </p>
                 )}
               </div>
