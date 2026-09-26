@@ -299,3 +299,14 @@ async def create_run(
         )
     runner.start(run_id)
     return run_id
+
+
+async def with_filenames(bindings: dict | None) -> dict:
+    """Bindings for display: whole-dataset bindings gain their dataset's filename."""
+    bindings = dict(bindings or {})
+    ids = [b["dataset_id"] for b in bindings.values() if b.get("type") == "dataset" and b.get("dataset_id")]
+    if ids:
+        names = {r["id"]: r["filename"] for r in await db.pool().fetch("select id, filename from datasets where id = any($1)", ids)}
+        bindings = {k: {**b, "filename": names.get(b.get("dataset_id"))} if b.get("type") == "dataset" else b for k, b in bindings.items()}
+    return bindings
+

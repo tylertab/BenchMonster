@@ -35,6 +35,15 @@ export function RunMetadata({ run }: { run: Run }) {
       <Card title="Files">
         <div className="space-y-3 text-sm">
           <div>
+            {Object.keys(run.bindings ?? {}).length > 0 && (
+              <div className="mb-2 space-y-0.5 text-xs text-ink-2">
+                {Object.entries(run.bindings).map(([name, b]) => (
+                  <div key={name}>
+                    <code className="text-accent">{`{{${name}}}`}</code> ← {b.type === "text" ? "fixed text" : `whole dataset ${b.filename ?? b.dataset_id} as ${b.format.toUpperCase()}`}
+                  </div>
+                ))}
+              </div>
+            )}
             <div className="mb-1 text-xs text-muted">Inputs</div>
             <ul className="space-y-1.5">
               {run.datasets.map((d) => (

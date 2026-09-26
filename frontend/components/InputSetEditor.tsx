@@ -94,14 +94,16 @@ export function DatasetPicker({ datasets, onPick, onUploaded, onCancel, title }:
   );
 }
 
-/** Section 2 card: an input file and which prompt variable each of its columns feeds. */
-export function InputFileCard({ set, variables, onChange, onRemove }: {
+/** A record source: each row becomes one prompt; shows which variable each column feeds. */
+export function InputFileCard({ set, variables, wholeRecordVars = [], onChange, onRemove }: {
   set: InputSet;
-  variables: string[];
+  variables: string[]; // variables read from a column of each record
+  wholeRecordVars?: string[]; // variables that receive the whole record as JSON
   onChange: (s: InputSet) => void;
   onRemove: () => void;
 }) {
   const feeds = (col: string) => variables.filter((v) => set.mapping[v] === col);
+  const leaks = wholeRecordVars.length > 0 && set.expectedSource === "column" && set.expectedColumn;
   const props = set.input.schema?.properties ?? {};
   return (
     <div className="rounded-md border border-line p-3">
@@ -115,9 +117,17 @@ export function InputFileCard({ set, variables, onChange, onRemove }: {
       </div>
       {set.input.description && <p className="mt-0.5 text-xs text-ink-2">{set.input.description}</p>}
 
-      {variables.length === 0 ? (
-        <p className="mt-2 text-xs text-muted">Write the prompt (section 4); each {"{{variable}}"} in it is filled from a column here.</p>
-      ) : (
+      {wholeRecordVars.length > 0 && (
+        <p className="mt-2 text-xs text-ink-2">
+          {wholeRecordVars.map((v) => `{{${v}}}`).join(", ")} ← the whole record as JSON
+        </p>
+      )}
+      {leaks && (
+        <p className="mt-1 text-xs text-critical">
+          The whole record includes the expected column <code>{set.expectedColumn}</code>, so the answer would be in the prompt. Put expected outputs in a separate file, or use record fields instead.
+        </p>
+      )}
+      {variables.length === 0 ? null : (
         <div className="mt-2 grid gap-2 sm:grid-cols-2">
           {variables.map((v) => (
             <label key={v} className="flex items-center gap-2 text-sm">
@@ -150,7 +160,7 @@ export function InputFileCard({ set, variables, onChange, onRemove }: {
             >
               {c}
               {props[c]?.type && <span className="ml-1 opacity-70">{props[c].type}</span>}
-              {f.length > 0 ? ` → ${f.map((v) => `{{${v}}}`).join(", ")}` : variables.length ? " · not used" : ""}
+              {f.length > 0 ? ` → ${f.map((v) => `{{${v}}}`).join(", ")}` : wholeRecordVars.length ? "" : variables.length ? " · not used" : ""}
             </span>
           );
         })}

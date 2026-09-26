@@ -57,6 +57,7 @@ async def _version(profile_id: int, version: int) -> dict:
     out = {k: v[k] for k in ("version", "prompt_name", "system_prompt", "template", "scoring_method",
                              "scoring_config", "model_ids", "params", "note", "created_at", "created_by_name",
                              "bindings", "expected_text")}
+    out["display_bindings"] = await runconfig.with_filenames(v["bindings"])
     return {**out, "variables": templates.variables(v["template"]),
             "datasets": [dict(d) for d in datasets], "models": [dict(m) for m in models]}
 

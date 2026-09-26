@@ -5,7 +5,7 @@ from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
-from .. import auth, db, templates
+from .. import auth, db, runconfig, templates
 
 router = APIRouter(prefix="/api/runs", tags=["runs"])
 
@@ -133,6 +133,7 @@ async def get_run(run_id: int, ctx: auth.Ctx = Depends(auth.current_ctx)):
     )
     return {
         **dict(run),
+        "bindings": await runconfig.with_filenames(run["bindings"]),
         "variables": templates.variables(run["template"]),
         "datasets": await _datasets(run_id),
         "models": [dict(m) for m in models],

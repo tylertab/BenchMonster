@@ -47,31 +47,67 @@ export function ProfileConfigView({ v }: { v: ProfileVersion }) {
         </p>
       </Card>
 
-      <Card title="Inputs" actions={<span className="text-xs text-muted">what is fed into the prompt</span>}>
-        <ul className="space-y-3 text-sm">
-          {v.datasets.map((d) => (
-            <li key={d.position}>
-              <div className="flex items-center gap-2">
-                <FormatBadge format={d.format} />
-                <DatasetLink id={d.dataset_id} available={d.available} filename={d.filename} />
-                {d.row_count != null && <span className="tabular text-xs text-muted">{d.row_count.toLocaleString()} rows</span>}
-              </div>
-              <div className="ml-1 mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-ink-2">
-                {Object.entries(d.mapping).map(([k, c]) => (
-                  <span key={k}>
-                    <span className="font-mono">{c}</span> → <code className="text-accent">{`{{${k}}}`}</code>
-                  </span>
+      <Card title={`Prompt · ${v.prompt_name}`} actions={<VariableChips variables={v.variables} />}>
+        {v.system_prompt && <p className="mb-2 text-xs text-ink-2">System: {v.system_prompt}</p>}
+        <div className="max-h-80 overflow-auto rounded-md bg-surface-2/60 p-3">
+          <TemplateView template={v.template} />
+        </div>
+      </Card>
+
+      <Card title="Inputs" actions={<span className="text-xs text-muted">where each variable&apos;s value comes from</span>}>
+        <div className="space-y-3 text-sm">
+          <table className="w-full text-sm">
+            <tbody>
+              {v.variables.map((name) => {
+                const b = v.bindings?.[name];
+                const whole = v.datasets.some((d) => d.mapping[name] === "$record");
+                return (
+                  <tr key={name} className="border-t border-line first:border-0 align-top">
+                    <td className="w-40 py-1.5">
+                      <code className="text-accent">{`{{${name}}}`}</code>
+                    </td>
+                    <td className="py-1.5 text-ink-2">
+                      {b?.type === "text" ? (
+                        <>
+                          fixed text: <span className="text-ink">{b.value.length > 120 ? `${b.value.slice(0, 120)}…` : b.value}</span>
+                        </>
+                      ) : b?.type === "dataset" ? (
+                        <>whole dataset <span className="font-mono text-ink">{v.display_bindings?.[name]?.filename ?? `dataset ${b.dataset_id}`}</span> as {b.format.toUpperCase()}</>
+                      ) : whole ? (
+                        "whole record (JSON)"
+                      ) : (
+                        <>record field {v.datasets.map((d) => <span key={d.position} className="mr-2 font-mono text-ink">{d.mapping[name]}</span>)}</>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+          {v.datasets.length > 0 ? (
+            <div>
+              <div className="mb-1 text-xs text-muted">Record sources (one prompt per record)</div>
+              <ul className="space-y-1">
+                {v.datasets.map((d) => (
+                  <li key={d.position} className="flex items-center gap-2">
+                    <FormatBadge format={d.format} />
+                    <DatasetLink id={d.dataset_id} available={d.available} filename={d.filename} />
+                    {d.row_count != null && <span className="tabular text-xs text-muted">{d.row_count.toLocaleString()} rows</span>}
+                  </li>
                 ))}
-              </div>
-            </li>
-          ))}
-        </ul>
+              </ul>
+            </div>
+          ) : (
+            <p className="text-xs text-ink-2">No record sources: each run sends a single prompt per model.</p>
+          )}
+        </div>
       </Card>
 
       <Card title="Expected outputs" actions={<span className="text-xs text-muted">how replies are processed and compared</span>}>
         <div className="space-y-4 text-sm">
           <div>
             <div className="mb-1 text-xs text-muted">Expected values</div>
+            {v.datasets.length === 0 && <p>{v.expected_text ? <span className="font-mono">{v.expected_text}</span> : <span className="text-muted">none</span>}</p>}
             <ul className="space-y-1.5">
               {v.datasets.map((d) => (
                 <li key={d.position} className="flex flex-wrap items-center gap-x-2">
@@ -113,13 +149,6 @@ export function ProfileConfigView({ v }: { v: ProfileVersion }) {
               </details>
             )}
           </div>
-        </div>
-      </Card>
-
-      <Card title={`Prompt · ${v.prompt_name}`} actions={<VariableChips variables={v.variables} />}>
-        {v.system_prompt && <p className="mb-2 text-xs text-ink-2">System: {v.system_prompt}</p>}
-        <div className="max-h-80 overflow-auto rounded-md bg-surface-2/60 p-3">
-          <TemplateView template={v.template} />
         </div>
       </Card>
 

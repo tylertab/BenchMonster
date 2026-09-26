@@ -1,23 +1,54 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { DatasetPicker, ExpectedOutputCard, guessExpected, InputFileCard, type InputSet, inputSetProblems, toRef } from "@/components/InputSetEditor";
 import { DEFAULT_PARAMS, ModelPicker } from "@/components/ModelPicker";
 import { buildScoringConfig, DEFAULT_SCORING, METHODS, OutputProcessing, ScoringConfig, scoringStateFrom, type ScoringState } from "@/components/ScoringConfig";
 import { VariableChips } from "@/components/TemplateView";
 import { Button, Card, compactInputClass, Empty, ErrorNote, Field, inputClass } from "@/components/ui";
-import { api, type Dataset, type DatasetDetail, type ProfileConfig, type Prompt, type RunMode, type RunParams, type ScoringMethod } from "@/lib/api";
+import {
+  api,
+  type Binding,
+  type Dataset,
+  type DatasetDetail,
+  type ProfileConfig,
+  type Prompt,
+  type RunMode,
+  type RunParams,
+  type ScoringMethod,
+  WHOLE_RECORD,
+} from "@/lib/api";
 import { renderTemplate, templateVariables } from "@/lib/template";
 
 export type ProfileDraft = { name: string; description: string; config: ProfileConfig; note: string };
 
+/** Where a prompt variable's value comes from. */
+type VarSource = "field" | "record" | "dataset" | "text";
+type InlineFormat = "json" | "jsonl" | "csv";
+
+const SOURCE_LABEL: Record<VarSource, string> = {
+  field: "Record field",
+  record: "Whole record (JSON)",
+  dataset: "Whole dataset",
+  text: "Fixed text",
+};
+const SOURCE_HINT: Record<VarSource, string> = {
+  field: "One column of each record; one prompt per record",
+  record: "Each record as a JSON object; one prompt per record",
+  dataset: "An entire file inlined into every prompt (catalogs, reference data)",
+  text: "The same text in every prompt",
+};
+
 let nextKey = 0;
 const newKey = () => `set-${++nextKey}`;
 
-function resolveMapping(variables: string[], columns: string[], prev: Record<string, string> = {}) {
+function resolveMapping(fieldVars: string[], wholeVars: string[], columns: string[], prev: Record<string, string> = {}) {
   const lower = new Map(columns.map((c) => [c.toLowerCase(), c]));
-  return Object.fromEntries(variables.map((v) => [v, columns.includes(prev[v]) ? prev[v] : (lower.get(v.toLowerCase()) ?? "")]));
+  return {
+    ...Object.fromEntries(fieldVars.map((v) => [v, columns.includes(prev[v]) ? prev[v] : (lower.get(v.toLowerCase()) ?? "")])),
+    ...Object.fromEntries(wholeVars.map((v) => [v, WHOLE_RECORD])),
+  };
 }
 
 function newInputSet(d: Dataset): InputSet {
@@ -46,8 +77,9 @@ function Section({ n, title, subtitle, children, actions }: { n: number; title: 
 }
 
 /**
- * Create or edit a benchmark profile: inputs & expected outputs, prompt,
- * comparison, execution. In edit mode, saving creates a new version.
+ * Create or edit a benchmark profile, prompt first: every {{variable}} gets a
+ * source (a record field, the whole record, a whole dataset, or fixed text).
+ * In edit mode, saving creates a new version.
  */
 export function ProfileEditor({
   mode,
@@ -66,37 +98,39 @@ export function ProfileEditor({
 
   const [name, setName] = useState(initial?.name ?? "");
   const [description, setDescription] = useState(initial?.description ?? "");
-  const [sets, setSets] = useState<InputSet[]>([]);
-  const [adding, setAdding] = useState(false);
+  const [runMode, setRunMode] = useState<RunMode>(initial?.config.mode ?? "realtime");
+  const [batchSize, setBatchSize] = useState(initial?.config.batch_size ?? 10);
+
   const [promptName, setPromptName] = useState(initial?.config.prompt_name ?? "");
   const [systemPrompt, setSystemPrompt] = useState(initial?.config.system_prompt ?? "");
   const [template, setTemplate] = useState(initial?.config.template ?? "");
+
+  // Per-variable sources. Variables not listed default to "field".
+  const initialSources: Record<string, VarSource> = {};
+  for (const [v, b] of Object.entries(initial?.config.bindings ?? {})) initialSources[v] = b.type === "text" ? "text" : "dataset";
+  for (const d of initial?.config.datasets ?? []) for (const [v, c] of Object.entries(d.mapping)) if (c === WHOLE_RECORD) initialSources[v] = "record";
+  const [sources, setSources] = useState<Record<string, VarSource>>(initialSources);
+  const [texts, setTexts] = useState<Record<string, string>>(
+    Object.fromEntries(Object.entries(initial?.config.bindings ?? {}).flatMap(([v, b]) => (b.type === "text" ? [[v, b.value]] : []))),
+  );
+  const [inlines, setInlines] = useState<Record<string, { datasetId: number | null; format: InlineFormat }>>(
+    Object.fromEntries(
+      Object.entries(initial?.config.bindings ?? {}).flatMap(([v, b]) => (b.type === "dataset" ? [[v, { datasetId: b.dataset_id, format: b.format }]] : [])),
+    ),
+  );
+
+  const [sets, setSets] = useState<InputSet[]>([]);
+  const [adding, setAdding] = useState(false);
+  const [expectedText, setExpectedText] = useState(initial?.config.expected_text ?? "");
   const [preview, setPreview] = useState<DatasetDetail | null>(null);
-  const [method, setMethod] = useState<ScoringMethod>(initial?.config.scoring_method ?? "json_fields");
+
+  const [method, setMethod] = useState<ScoringMethod>(initial?.config.scoring_method ?? "exact");
   const [scoring, setScoring] = useState<ScoringState>(initial ? scoringStateFrom(initial.config.scoring_config, initial.config.scoring_method) : DEFAULT_SCORING);
   const [modelIds, setModelIds] = useState<number[]>(initial?.config.model_ids ?? []);
   const [runParams, setRunParams] = useState<RunParams>(
     initial ? { max_tokens: initial.config.max_tokens, temperature: initial.config.temperature, concurrency: initial.config.concurrency } : DEFAULT_PARAMS,
   );
-  const [runMode, setRunMode] = useState<RunMode>(initial?.config.mode ?? "realtime");
-  const [batchSize, setBatchSize] = useState(initial?.config.batch_size ?? 10);
   const [note, setNote] = useState("");
-  const templateRef = useRef<HTMLTextAreaElement>(null);
-
-  // Insert {{column}} at the cursor in the template.
-  const insertVariable = (name: string) => {
-    const el = templateRef.current;
-    const token = `{{${name}}}`;
-    if (!el) return setTemplate((t) => t + token);
-    const { selectionStart: a, selectionEnd: b } = el;
-    const next = template.slice(0, a) + token + template.slice(b);
-    setTemplate(next);
-    requestAnimationFrame(() => {
-      el.focus();
-      el.setSelectionRange(a + token.length, a + token.length);
-    });
-  };
-
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -141,11 +175,17 @@ export function ProfileEditor({
   }, []);
 
   const variables = templateVariables(template);
-  const resolved = sets.map((s) => ({ ...s, mapping: resolveMapping(variables, s.input.columns, s.mapping) }));
+  const sourceOf = (v: string): VarSource => sources[v] ?? "field";
+  const fieldVars = variables.filter((v) => sourceOf(v) === "field");
+  const wholeVars = variables.filter((v) => sourceOf(v) === "record");
+  const recordVars = [...fieldVars, ...wholeVars];
+  const perRecord = recordVars.length > 0;
+  const resolved = sets.map((s) => ({ ...s, mapping: resolveMapping(fieldVars, wholeVars, s.input.columns, s.mapping) }));
   const updateSet = (key: string, next: InputSet) => setSets((cur) => cur.map((s) => (s.key === key ? next : s)));
   const addUploaded = (d: Dataset) => setDatasets((cur) => [d, ...(cur ?? []).filter((x) => x.id !== d.id)]);
+  const byId = new Map((datasets ?? []).map((d) => [d.id, d]));
 
-  const firstId = resolved[0]?.input.id;
+  const firstId = perRecord ? resolved[0]?.input.id : undefined;
   useEffect(() => {
     if (!firstId) return;
     let alive = true;
@@ -156,16 +196,27 @@ export function ProfileEditor({
   }, [firstId]);
   const shownPreview = firstId && preview?.id === firstId ? preview : null;
 
+  const bindings: Record<string, Binding> = {};
+  for (const v of variables) {
+    if (sourceOf(v) === "text") bindings[v] = { type: "text", value: texts[v] ?? "" };
+    if (sourceOf(v) === "dataset" && inlines[v]?.datasetId) bindings[v] = { type: "dataset", dataset_id: inlines[v].datasetId!, format: inlines[v].format };
+  }
+
   const methodInfo = METHODS.find((m) => m.value === method)!;
   const problems: string[] = [];
   if (!name.trim()) problems.push("Name the benchmark profile.");
-  if (resolved.length === 0) problems.push("Add at least one input.");
-  for (const s of resolved) problems.push(...inputSetProblems(s, methodInfo.needsExpected, methodInfo.label));
   if (!promptName.trim()) problems.push("Name the prompt.");
   if (variables.length === 0) problems.push("The template needs at least one {{variable}}.");
-  for (const s of resolved) {
-    const unmapped = variables.filter((v) => !s.mapping[v]);
-    if (unmapped.length) problems.push(`${s.input.filename}: map ${unmapped.map((v) => `{{${v}}}`).join(", ")} in the Inputs section.`);
+  for (const v of variables) if (sourceOf(v) === "dataset" && !inlines[v]?.datasetId) problems.push(`Choose the dataset to inline for {{${v}}}.`);
+  if (perRecord) {
+    if (resolved.length === 0) problems.push(`Add a record source for ${recordVars.map((v) => `{{${v}}}`).join(", ")}.`);
+    for (const s of resolved) {
+      const unmapped = fieldVars.filter((v) => !s.mapping[v]);
+      if (unmapped.length) problems.push(`${s.input.filename}: choose columns for ${unmapped.map((v) => `{{${v}}}`).join(", ")}.`);
+      problems.push(...inputSetProblems(s, methodInfo.needsExpected, methodInfo.label));
+    }
+  } else if (methodInfo.needsExpected && !expectedText.trim()) {
+    problems.push(`${methodInfo.label} scoring needs an expected output.`);
   }
   if (modelIds.length === 0) problems.push("Pick at least one model.");
 
@@ -188,7 +239,9 @@ export function ProfileEditor({
           prompt_name: promptName.trim(),
           system_prompt: systemPrompt.trim() || null,
           template,
-          datasets: resolved.map((s) => toRef(s, s.mapping)),
+          bindings,
+          datasets: perRecord ? resolved.map((s) => toRef(s, s.mapping)) : [],
+          expected_text: perRecord ? null : expectedText.trim() || null,
           scoring_method: method,
           scoring_config: scoringConfig,
           model_ids: modelIds,
@@ -206,8 +259,21 @@ export function ProfileEditor({
 
   if (datasets === null) return error ? <ErrorNote error={error} /> : <Empty>Loading…</Empty>;
 
-  const previewValues = shownPreview?.rows[0] && resolved[0] ? Object.fromEntries(variables.map((v) => [v, shownPreview.rows[0][resolved[0].mapping[v]] ?? ""])) : null;
-  const totalInputs = resolved.reduce((a, s) => a + s.input.row_count, 0);
+  const previewValues: Record<string, string> | null =
+    variables.length === 0
+      ? null
+      : Object.fromEntries(
+          variables.map((v) => {
+            const src = sourceOf(v);
+            if (src === "text") return [v, texts[v] ?? ""];
+            if (src === "dataset") return [v, inlines[v]?.datasetId ? `[whole dataset: ${byId.get(inlines[v].datasetId!)?.filename ?? "?"} as ${inlines[v].format}]` : `{{${v}}}`];
+            const row = shownPreview?.rows[0];
+            if (!row) return [v, `{{${v}}}`];
+            if (src === "record") return [v, JSON.stringify(Object.fromEntries(resolved[0].input.columns.map((c) => [c, row[c]])))];
+            return [v, row[resolved[0].mapping[v]] ?? `{{${v}}}`];
+          }),
+        );
+  const totalInputs = perRecord ? resolved.reduce((a, s) => a + s.input.row_count, 0) : 1;
   const requestsPerModel = runMode === "batch" ? Math.ceil(totalInputs / batchSize) : totalInputs;
 
   return (
@@ -227,8 +293,8 @@ export function ProfileEditor({
             <div className="grid gap-2 sm:grid-cols-2">
               {(
                 [
-                  ["realtime", "Real-time", "One streaming request per input, in parallel. Measures per-input latency and time to first token."],
-                  ["batch", "Batch (packed prompts)", "Several inputs per request; the model returns a JSON array of answers. Tests batch handling; shares tokens and cost."],
+                  ["realtime", "Real-time", "One streaming request per prompt, in parallel. Measures per-prompt latency and time to first token."],
+                  ["batch", "Batch (packed prompts)", "Several prompts per request; the model returns a JSON array of answers. Tests batch handling; shares tokens and cost."],
                 ] as [RunMode, string, string][]
               ).map(([value, label, desc]) => (
                 <button
@@ -244,99 +310,17 @@ export function ProfileEditor({
             </div>
             {runMode === "batch" && (
               <label className="mt-2 flex items-center gap-2 text-sm">
-                <span className="text-ink-2">Inputs per request</span>
+                <span className="text-ink-2">Prompts per request</span>
                 <input type="number" min={2} max={50} aria-label="Inputs per request" className={`${compactInputClass} w-20`} value={batchSize} onChange={(e) => setBatchSize(Math.max(2, Math.min(50, Number(e.target.value) || 2)))} />
-                <span className="text-xs text-muted">Max tokens (section 5) is per input; a request gets max tokens × inputs.</span>
+                <span className="text-xs text-muted">Max tokens (section 5) is per prompt; a request gets max tokens × prompts.</span>
               </label>
             )}
           </div>
         </div>
       </Section>
 
-      <Section n={2} title="Inputs" subtitle="what is fed into the prompt">
-        <div className="space-y-3">
-          {missing > 0 && (
-            <p className="rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-sm">
-              {missing} input set{missing === 1 ? " uses" : "s use"} a deleted dataset and {missing === 1 ? "is" : "are"} left out of this version.
-            </p>
-          )}
-          {resolved.map((s) => (
-            <InputFileCard
-              key={s.key}
-              set={s}
-              variables={variables}
-              onChange={(next) => updateSet(s.key, next)}
-              onRemove={() => setSets((cur) => cur.filter((x) => x.key !== s.key))}
-            />
-          ))}
-          {adding ? (
-            <DatasetPicker
-              title="Choose an input file"
-              datasets={datasets}
-              onPick={(d) => {
-                setSets((cur) => [...cur, newInputSet(d)]);
-                setAdding(false);
-              }}
-              onUploaded={(d) => {
-                addUploaded(d);
-                setSets((cur) => [...cur, newInputSet(d)]);
-                setAdding(false);
-              }}
-              onCancel={() => setAdding(false)}
-            />
-          ) : (
-            <Button type="button" variant="secondary" onClick={() => setAdding(true)}>
-              + Add input
-            </Button>
-          )}
-          {datasets.length === 0 && !adding && (
-            <p className="text-xs text-muted">
-              Tip: manage files and their schemas on the{" "}
-              <Link href="/datasets" className="text-accent underline">
-                Datasets
-              </Link>{" "}
-              page.
-            </p>
-          )}
-        </div>
-      </Section>
-
-      <Section n={3} title="Expected outputs" subtitle="how model replies are processed and compared">
-        <div className="space-y-5">
-          <div className="space-y-2">
-            <h3 className="text-sm font-medium">Expected values</h3>
-            {resolved.length === 0 ? (
-              <p className="text-xs text-muted">Add an input first; each input gets its own expected outputs.</p>
-            ) : (
-              resolved.map((s) => <ExpectedOutputCard key={s.key} set={s} datasets={datasets} onChange={(next) => updateSet(s.key, next)} onUploaded={addUploaded} />)
-            )}
-          </div>
-          <div className="space-y-2">
-            <h3 className="text-sm font-medium">Processing the model&apos;s reply</h3>
-            <OutputProcessing state={scoring} onChange={setScoring} />
-          </div>
-          <div className="space-y-2">
-            <h3 className="text-sm font-medium">Comparison with the expected value</h3>
-            <div className="grid gap-2 sm:grid-cols-3">
-              {METHODS.map((m) => (
-                <button
-                  type="button"
-                  key={m.value}
-                  onClick={() => setMethod(m.value)}
-                  className={`rounded-md border p-2.5 text-left text-sm ${method === m.value ? "border-accent bg-accent/5" : "border-line hover:bg-surface-2"}`}
-                >
-                  <span className="block font-medium">{m.label}</span>
-                  <span className="mt-0.5 block text-xs text-ink-2">{m.description}</span>
-                </button>
-              ))}
-            </div>
-            <ScoringConfig method={method} state={scoring} onChange={setScoring} />
-          </div>
-        </div>
-      </Section>
-
       <Section
-        n={4}
+        n={2}
         title="Prompt"
         actions={
           prompts.length > 0 && (
@@ -366,29 +350,176 @@ export function ProfileEditor({
           <Field label="System prompt" hint="Optional">
             <textarea rows={2} className={inputClass} value={systemPrompt} onChange={(e) => setSystemPrompt(e.target.value)} />
           </Field>
-          <Field label="Template" hint="{{variable}} placeholders are filled from the input columns mapped in section 2">
-            <textarea ref={templateRef} rows={10} className={`${inputClass} font-mono text-xs`} value={template} onChange={(e) => setTemplate(e.target.value)} />
+          <Field label="Template" hint="Each {{variable}} becomes an input you connect in the next section">
+            <textarea rows={10} className={`${inputClass} font-mono text-xs`} value={template} onChange={(e) => setTemplate(e.target.value)} placeholder={"Catalog:\n{{catalog}}\n\nQuestion: {{question}}"} />
           </Field>
-          {resolved.length > 0 && (
-            <div className="flex flex-wrap items-center gap-1.5 text-xs">
-              <span className="text-ink-2">Insert an input column:</span>
-              {[...new Set(resolved.flatMap((s) => s.input.columns))].map((c) => (
-                <button key={c} type="button" onClick={() => insertVariable(c)} className="rounded bg-surface-2 px-1.5 py-0.5 font-mono hover:bg-accent/10 hover:text-accent">
-                  {`{{${c}}}`}
-                </button>
-              ))}
-            </div>
-          )}
           <div className="flex items-center gap-2 text-sm">
             <span className="text-ink-2">Variables:</span>
             {variables.length ? <VariableChips variables={variables} /> : <span className="text-critical">none yet</span>}
           </div>
-          {previewValues && (
-            <div>
-              <div className="mb-1 text-xs text-muted">Preview: first input of {resolved[0].input.filename}</div>
-              <pre className="max-h-48 overflow-auto whitespace-pre-wrap rounded-md bg-surface-2/60 p-3 font-mono text-xs">{renderTemplate(template, previewValues)}</pre>
+        </div>
+      </Section>
+
+      <Section n={3} title="Inputs" subtitle="where each variable's value comes from">
+        {variables.length === 0 ? (
+          <p className="text-sm text-muted">Write the prompt first; each {"{{variable}}"} appears here to connect.</p>
+        ) : (
+          <div className="space-y-5">
+            <div className="space-y-2">
+              {variables.map((v) => {
+                const src = sourceOf(v);
+                return (
+                  <div key={v} className="rounded-md border border-line p-2.5">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <code className="min-w-32 text-sm text-accent">{`{{${v}}}`}</code>
+                      <span className="text-muted">←</span>
+                      <select className={compactInputClass} value={src} onChange={(e) => setSources({ ...sources, [v]: e.target.value as VarSource })} aria-label={`Source for ${v}`}>
+                        {(Object.keys(SOURCE_LABEL) as VarSource[]).map((k) => (
+                          <option key={k} value={k}>
+                            {SOURCE_LABEL[k]}
+                          </option>
+                        ))}
+                      </select>
+                      {src === "dataset" && (
+                        <>
+                          <select
+                            className={`${compactInputClass} max-w-64 ${inlines[v]?.datasetId ? "" : "border-critical"}`}
+                            value={inlines[v]?.datasetId ?? ""}
+                            onChange={(e) => setInlines({ ...inlines, [v]: { format: inlines[v]?.format ?? "json", datasetId: Number(e.target.value) || null } })}
+                            aria-label={`Dataset for ${v}`}
+                          >
+                            <option value="">choose dataset…</option>
+                            {datasets.map((d) => (
+                              <option key={d.id} value={d.id}>
+                                {d.filename} ({d.row_count} rows)
+                              </option>
+                            ))}
+                          </select>
+                          <select
+                            className={compactInputClass}
+                            value={inlines[v]?.format ?? "json"}
+                            onChange={(e) => setInlines({ ...inlines, [v]: { datasetId: inlines[v]?.datasetId ?? null, format: e.target.value as InlineFormat } })}
+                            aria-label={`Format for ${v}`}
+                          >
+                            <option value="json">as JSON array</option>
+                            <option value="jsonl">as JSON lines</option>
+                            <option value="csv">as CSV</option>
+                          </select>
+                        </>
+                      )}
+                      <span className="ml-auto text-xs text-muted">{SOURCE_HINT[src]}</span>
+                    </div>
+                    {src === "text" && (
+                      <textarea rows={2} className={`${inputClass} mt-2`} value={texts[v] ?? ""} onChange={(e) => setTexts({ ...texts, [v]: e.target.value })} placeholder={`Value for {{${v}}}`} aria-label={`Text for ${v}`} />
+                    )}
+                  </div>
+                );
+              })}
             </div>
-          )}
+
+            {perRecord ? (
+              <div className="space-y-2">
+                <h3 className="text-sm font-medium">
+                  Record sources <span className="font-normal text-muted">· one prompt per record, for {recordVars.map((v) => `{{${v}}}`).join(", ")}</span>
+                </h3>
+                {missing > 0 && (
+                  <p className="rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-sm">
+                    {missing} record source{missing === 1 ? " uses" : "s use"} a deleted dataset and {missing === 1 ? "is" : "are"} left out.
+                  </p>
+                )}
+                {resolved.map((s) => (
+                  <InputFileCard
+                    key={s.key}
+                    set={s}
+                    variables={fieldVars}
+                    wholeRecordVars={wholeVars}
+                    onChange={(next) => updateSet(s.key, next)}
+                    onRemove={() => setSets((cur) => cur.filter((x) => x.key !== s.key))}
+                  />
+                ))}
+                {adding ? (
+                  <DatasetPicker
+                    title="Choose a file of records"
+                    datasets={datasets}
+                    onPick={(d) => {
+                      setSets((cur) => [...cur, newInputSet(d)]);
+                      setAdding(false);
+                    }}
+                    onUploaded={(d) => {
+                      addUploaded(d);
+                      setSets((cur) => [...cur, newInputSet(d)]);
+                      setAdding(false);
+                    }}
+                    onCancel={() => setAdding(false)}
+                  />
+                ) : (
+                  <Button type="button" variant="secondary" onClick={() => setAdding(true)}>
+                    + Add record source
+                  </Button>
+                )}
+              </div>
+            ) : (
+              <p className="rounded-md bg-surface-2/60 px-3 py-2 text-sm text-ink-2">
+                No variable reads per-record data, so each run sends <strong>a single prompt</strong> per model.
+              </p>
+            )}
+
+            {previewValues && (
+              <div>
+                <div className="mb-1 text-xs text-muted">Preview{perRecord && resolved[0] ? `: first record of ${resolved[0].input.filename}` : ""}</div>
+                <pre className="max-h-56 overflow-auto whitespace-pre-wrap rounded-md bg-surface-2/60 p-3 font-mono text-xs">{renderTemplate(template, previewValues)}</pre>
+              </div>
+            )}
+            {datasets.length === 0 && (
+              <p className="text-xs text-muted">
+                Upload files on the{" "}
+                <Link href="/datasets" className="text-accent underline">
+                  Datasets
+                </Link>{" "}
+                page, or with + Add record source.
+              </p>
+            )}
+          </div>
+        )}
+      </Section>
+
+      <Section n={4} title="Expected outputs" subtitle="how model replies are processed and compared">
+        <div className="space-y-5">
+          <div className="space-y-2">
+            <h3 className="text-sm font-medium">Expected values</h3>
+            {perRecord ? (
+              resolved.length === 0 ? (
+                <p className="text-xs text-muted">Add a record source first; each gets its own expected outputs.</p>
+              ) : (
+                resolved.map((s) => <ExpectedOutputCard key={s.key} set={s} datasets={datasets} onChange={(next) => updateSet(s.key, next)} onUploaded={addUploaded} />)
+              )
+            ) : (
+              <Field label="Expected output" hint="For the single prompt; optional with an LLM judge or schema check">
+                <textarea rows={3} className={inputClass} value={expectedText} onChange={(e) => setExpectedText(e.target.value)} placeholder="PH-310" />
+              </Field>
+            )}
+          </div>
+          <div className="space-y-2">
+            <h3 className="text-sm font-medium">Processing the model&apos;s reply</h3>
+            <OutputProcessing state={scoring} onChange={setScoring} />
+          </div>
+          <div className="space-y-2">
+            <h3 className="text-sm font-medium">Comparison with the expected value</h3>
+            <div className="grid gap-2 sm:grid-cols-3">
+              {METHODS.map((m) => (
+                <button
+                  type="button"
+                  key={m.value}
+                  onClick={() => setMethod(m.value)}
+                  className={`rounded-md border p-2.5 text-left text-sm ${method === m.value ? "border-accent bg-accent/5" : "border-line hover:bg-surface-2"}`}
+                >
+                  <span className="block font-medium">{m.label}</span>
+                  <span className="mt-0.5 block text-xs text-ink-2">{m.description}</span>
+                </button>
+              ))}
+            </div>
+            <ScoringConfig method={method} state={scoring} onChange={setScoring} />
+          </div>
         </div>
       </Section>
 
@@ -399,7 +530,7 @@ export function ProfileEditor({
       {mode === "edit" && (
         <Card>
           <Field label="What changed?" hint={`Saved as version ${(initial?.currentVersion ?? 0) + 1}. Earlier versions and their runs stay as they are.`}>
-            <input className={inputClass} value={note} onChange={(e) => setNote(e.target.value)} placeholder="Expected outputs moved to their own file; batch mode" />
+            <input className={inputClass} value={note} onChange={(e) => setNote(e.target.value)} placeholder="Catalog inlined as CSV; question per record" />
           </Field>
         </Card>
       )}
@@ -407,10 +538,10 @@ export function ProfileEditor({
       <ErrorNote error={error} />
       <div className="flex flex-wrap items-center justify-end gap-3">
         {problems.length > 0 && <span className="mr-auto text-xs text-ink-2">{problems[0]}</span>}
-        {totalInputs > 0 && modelIds.length > 0 && (
+        {modelIds.length > 0 && variables.length > 0 && (
           <span className="text-sm text-ink-2">
-            {totalInputs.toLocaleString()} input{totalInputs === 1 ? "" : "s"} × {modelIds.length} model{modelIds.length === 1 ? "" : "s"} ·{" "}
-            {requestsPerModel.toLocaleString()} request{requestsPerModel === 1 ? "" : "s"} per model
+            {totalInputs.toLocaleString()} prompt{totalInputs === 1 ? "" : "s"} × {modelIds.length} model{modelIds.length === 1 ? "" : "s"} · {requestsPerModel.toLocaleString()} request
+            {requestsPerModel === 1 ? "" : "s"} per model
           </span>
         )}
         <Button onClick={submit} disabled={busy || problems.length > 0}>
@@ -420,3 +551,4 @@ export function ProfileEditor({
     </div>
   );
 }
+

@@ -128,6 +128,8 @@ export type RunDataset = {
 
 export type Run = {
   id: number;
+  bindings: Record<string, Binding & { filename?: string | null }>;
+  expected_text: string | null;
   name: string | null;
   profile_id: number | null;
   profile_version: number | null;
@@ -163,8 +165,16 @@ export type DatasetRef = {
   expected_key: string | null;
 };
 
+/** A prompt variable that doesn't vary per record. */
+export type Binding = { type: "text"; value: string } | { type: "dataset"; dataset_id: number; format: "json" | "jsonl" | "csv" };
+
+/** Mapping value meaning "the whole record, as JSON". */
+export const WHOLE_RECORD = "$record";
+
 /** Everything a benchmark profile version stores (and a run needs). */
 export type ProfileConfig = {
+  bindings: Record<string, Binding>;
+  expected_text: string | null;
   prompt_name: string;
   system_prompt: string | null;
   template: string;
@@ -178,6 +188,9 @@ export type ProfileConfig = {
 
 export type ProfileVersion = {
   version: number;
+  display_bindings: Record<string, Binding & { filename?: string | null }>;
+  bindings: Record<string, Binding>;
+  expected_text: string | null;
   prompt_name: string;
   system_prompt: string | null;
   template: string;
@@ -236,6 +249,8 @@ export type ProfileListItem = {
 /** Turn a stored version back into an editable config. */
 export function versionToConfig(v: ProfileVersion): ProfileConfig {
   return {
+    bindings: v.bindings ?? {},
+    expected_text: v.expected_text,
     prompt_name: v.prompt_name,
     system_prompt: v.system_prompt,
     template: v.template,
