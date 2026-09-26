@@ -69,7 +69,7 @@ export default function RunPage() {
             ← Runs
           </Link>
           <h1 className="mt-1 flex items-center gap-3 text-2xl font-semibold tracking-tight">
-            Run #{run.id}
+            Run ID {run.id}
             {run.name && <span className="font-normal text-ink-2">{run.name}</span>}
             <StatusBadge status={run.status} />
           </h1>

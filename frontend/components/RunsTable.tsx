@@ -24,7 +24,7 @@ export function RunsTable({ runs, compact = false }: { runs: RunListItem[]; comp
       <table className="w-full text-sm">
         <thead className="text-left text-xs text-muted">
           <tr>
-            <th className="pb-2 font-medium">Run</th>
+            <th className="pb-2 font-medium">Run ID</th>
             <th className="pb-2 font-medium">Prompt</th>
             <th className="pb-2 font-medium">Input files</th>
             <th className="pb-2 font-medium">Output file</th>
@@ -45,9 +45,10 @@ export function RunsTable({ runs, compact = false }: { runs: RunListItem[]; comp
                 className="cursor-pointer border-t border-line align-top hover:bg-surface-2/60"
               >
                 <td className="py-2.5 pr-3">
-                  <Link href={`/runs/${r.id}`} className="font-medium hover:text-accent" onClick={(e) => e.stopPropagation()}>
-                    #{r.id} {r.name && <span className="font-normal">{r.name}</span>}
+                  <Link href={`/runs/${r.id}`} className="tabular font-mono font-semibold hover:text-accent" onClick={(e) => e.stopPropagation()}>
+                    {r.id}
                   </Link>
+                  {r.name && <div className="max-w-[12rem] truncate text-sm">{r.name}</div>}
                   <div className="mt-1 flex items-center gap-2">
                     <StatusBadge status={r.status} />
                     {live && (

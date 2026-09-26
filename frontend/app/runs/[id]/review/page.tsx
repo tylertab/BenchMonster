@@ -23,7 +23,7 @@ export default function ReviewPage() {
     <div className="space-y-6">
       <div>
         <Link href={`/runs/${id}`} className="text-sm text-ink-2 hover:text-ink">
-          ← Run #{id} dashboard
+          ← Run ID {id}
         </Link>
         <h1 className="mt-1 flex items-center gap-3 text-2xl font-semibold tracking-tight">
           Review: {run ? run.name || run.prompt_name : "…"} {run && <StatusBadge status={run.status} />}

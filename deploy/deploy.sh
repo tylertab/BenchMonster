@@ -12,7 +12,7 @@ DEST=/opt/benchmonster
 echo "==> syncing code to $HOST:$DEST"
 ssh "$HOST" "mkdir -p $DEST"
 rsync -az --delete \
-  --exclude .git --exclude .env --exclude node_modules --exclude .next \
+  --exclude .git --exclude .env --exclude .env.local --exclude node_modules --exclude .next \
   --exclude .venv --exclude __pycache__ --exclude .DS_Store \
   "$ROOT/" "$HOST:$DEST/"
 

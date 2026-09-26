@@ -75,7 +75,7 @@ function NewRun() {
         if (cfg.prompt_id && ps.some((p) => p.id === cfg.prompt_id)) setPromptId(cfg.prompt_id);
         if (cfg.template !== cfg.current_template || (cfg.system_prompt ?? "") !== (cfg.current_system_prompt ?? "")) {
           setOverride({ template: cfg.template, system_prompt: cfg.system_prompt ?? "" });
-          if (cfg.current_template !== null) setCloneNote(`Using the template exactly as run #${fromRun} used it; the saved prompt has changed since.`);
+          if (cfg.current_template !== null) setCloneNote(`Using the template exactly as run ID ${fromRun} used it; the saved prompt has changed since.`);
         }
         const missing = cfg.datasets.filter((d) => !d.dataset_id || !byId.has(d.dataset_id));
         if (missing.length) setCloneNote(`Some input files were deleted and are skipped: ${missing.map((d) => d.filename).join(", ")}`);
@@ -190,13 +190,13 @@ function NewRun() {
   return (
     <div className="mx-auto max-w-4xl space-y-6">
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight">{fromRun ? `Clone run #${fromRun}` : "New run"}</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">{fromRun ? `Clone run ID ${fromRun}` : "New run"}</h1>
         <p className="mt-1 text-sm text-ink-2">
           {fromRun ? (
             <>
               Prefilled from{" "}
               <Link href={`/runs/${fromRun}`} className="text-accent hover:underline">
-                run #{fromRun}
+                run ID {fromRun}
               </Link>
               . Change anything, then start a new run.
             </>

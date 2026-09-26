@@ -99,7 +99,7 @@ function Dashboard() {
       <div className="flex flex-wrap items-center gap-2">
         <input
           className={`${inputClass} max-w-sm`}
-          placeholder="Search prompts, templates, files, models, #id…"
+          placeholder="Search prompts, templates, files, models, run ID…"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           aria-label="Search runs"
