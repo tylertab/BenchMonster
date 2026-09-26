@@ -18,6 +18,8 @@ import {
   type PgTable,
   type ProfileConfig,
   type Prompt,
+  type PromptDetail,
+  type PromptVersion,
   type RunMode,
   type RunParams,
   type ScoringMethod,
@@ -157,11 +159,55 @@ export function ProfileEditor({
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const loadPrompt = (p: Prompt) => {
+  // The library prompt version the text came from. It stays linked while the text matches it.
+  const [link, setLink] = useState<{ id: number; name: string; version: number; system: string; template: string } | null>(null);
+  const [libraryBusy, setLibraryBusy] = useState(false);
+  const loadPrompt = (p: Prompt, v?: PromptVersion) => {
+    const text = v ?? { version: p.current_version, system_prompt: p.system_prompt, template: p.template };
     setPromptName(p.name);
-    setSystemPrompt(p.system_prompt ?? "");
-    setTemplate(p.template);
+    setSystemPrompt(text.system_prompt ?? "");
+    setTemplate(text.template);
     setName((n) => n || p.name);
+    setLink({ id: p.id, name: p.name, version: text.version, system: text.system_prompt ?? "", template: text.template });
+  };
+  // "Load from prompt library": choose a prompt, then which of its versions.
+  const [pick, setPick] = useState<{ prompt: PromptDetail; version: number } | null>(null);
+  const choosePrompt = (id: number) => {
+    if (!id) return setPick(null);
+    api.prompt(id).then((d) => setPick({ prompt: d, version: d.current_version }), (e) => setError(e.message));
+  };
+  const loadPicked = async () => {
+    if (!pick) return;
+    const { prompt: d, version } = pick;
+    try {
+      loadPrompt(d, version === d.current_version ? undefined : await api.promptVersion(d.id, version));
+      setPick(null);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+  const linked = !!link && systemPrompt.trim() === link.system.trim() && template === link.template;
+  const latestVersion = link ? prompts.find((p) => p.id === link.id)?.current_version : undefined;
+  const refreshPrompts = () => api.prompts().then(setPrompts);
+  const saveToLibrary = async (asNew: boolean) => {
+    setError(null);
+    let name = link?.name ?? promptName;
+    if (asNew) {
+      const answer = window.prompt("Name for the new library prompt", promptName.trim() || "Untitled prompt")?.trim();
+      if (!answer) return;
+      name = answer;
+    }
+    setLibraryBusy(true);
+    try {
+      const body = { name, system_prompt: systemPrompt.trim() || undefined, template };
+      const p = asNew || !link ? await api.createPrompt(body) : await api.updatePrompt(link.id, body);
+      setLink({ id: p.id, name: p.name, version: p.current_version, system: p.system_prompt ?? "", template: p.template });
+      await refreshPrompts();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setLibraryBusy(false);
+    }
   };
 
   useEffect(() => {
@@ -179,6 +225,15 @@ export function ProfileEditor({
   useEffect(() => {
     Promise.all([api.prompts(), api.datasets()]).then(([ps, ds]) => {
       setPrompts(ps);
+      const cfg = initial?.config;
+      if (cfg?.prompt_id && cfg.prompt_version) {
+        const lib = ps.find((x) => x.id === cfg.prompt_id);
+        if (lib)
+          api.promptVersion(lib.id, cfg.prompt_version).then(
+            (v) => setLink({ id: lib.id, name: lib.name, version: v.version, system: v.system_prompt ?? "", template: v.template }),
+            () => {},
+          );
+      }
       setDatasets(ds);
       const byId = new Map(ds.map((d) => [d.id, d]));
       const linkedRef = initial?.config.datasets.find((r) => r.source);
@@ -354,6 +409,8 @@ export function ProfileEditor({
         description: description.trim(),
         config: {
           prompt_name: promptName.trim(),
+          prompt_id: linked ? link!.id : null,
+          prompt_version: linked ? link!.version : null,
           system_prompt: systemPrompt.trim() || null,
           template,
           bindings,
@@ -446,26 +503,93 @@ export function ProfileEditor({
         title="Prompt"
         actions={
           prompts.length > 0 && (
-            <select
-              className={`${compactInputClass} max-w-56 py-1 text-xs`}
-              value=""
-              onChange={(e) => {
-                const p = prompts.find((x) => x.id === Number(e.target.value));
-                if (p) loadPrompt(p);
-              }}
-              aria-label="Load from prompt library"
-            >
-              <option value="">Load from prompt library…</option>
-              {prompts.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                </option>
-              ))}
-            </select>
+            <span className="flex flex-wrap items-center gap-1.5">
+              <select
+                className={`${compactInputClass} max-w-56 py-1 text-xs`}
+                value={pick?.prompt.id ?? ""}
+                onChange={(e) => choosePrompt(Number(e.target.value))}
+                aria-label="Load from prompt library"
+              >
+                <option value="">Load from prompt library…</option>
+                {prompts.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name} (latest v{p.current_version})
+                  </option>
+                ))}
+              </select>
+              {pick && (
+                <>
+                  <select
+                    className={`${compactInputClass} max-w-56 py-1 text-xs`}
+                    value={pick.version}
+                    onChange={(e) => setPick({ ...pick, version: Number(e.target.value) })}
+                    aria-label="Prompt version"
+                  >
+                    {pick.prompt.versions.map((v) => (
+                      <option key={v.version} value={v.version}>
+                        v{v.version}
+                        {v.version === pick.prompt.current_version ? " (latest)" : ""}
+                        {v.note ? ` · ${v.note}` : ""}
+                      </option>
+                    ))}
+                  </select>
+                  <Button type="button" className="py-1 text-xs" onClick={loadPicked}>
+                    Load
+                  </Button>
+                </>
+              )}
+            </span>
           )
         }
       >
         <div className="space-y-3">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md bg-surface-2/60 px-3 py-2 text-xs text-ink-2">
+            {link && linked ? (
+              <>
+                <span>
+                  From the prompt library:{" "}
+                  <Link href={`/prompts/${link.id}`} className="font-medium text-accent hover:underline">
+                    {link.name} v{link.version}
+                  </Link>
+                </span>
+                {latestVersion && latestVersion > link.version && (
+                  <button
+                    type="button"
+                    className="text-accent hover:underline"
+                    onClick={() => {
+                      const p = prompts.find((x) => x.id === link.id);
+                      if (p) loadPrompt(p);
+                    }}
+                    title="Replaces the prompt text with the latest version"
+                  >
+                    v{latestVersion} is available · load it
+                  </button>
+                )}
+              </>
+            ) : link ? (
+              <>
+                <span>
+                  Edited from{" "}
+                  <Link href={`/prompts/${link.id}`} className="font-medium text-accent hover:underline">
+                    {link.name} v{link.version}
+                  </Link>
+                </span>
+                <Button type="button" variant="secondary" className="py-0.5 text-xs" disabled={libraryBusy} onClick={() => saveToLibrary(false)}>
+                  Save to library as v{(latestVersion ?? link.version) + 1}
+                </Button>
+                <button type="button" className="text-accent hover:underline" disabled={libraryBusy} onClick={() => saveToLibrary(true)}>
+                  or as a new prompt
+                </button>
+              </>
+            ) : (
+              <>
+                <span>Not saved in the prompt library.</span>
+                <button type="button" className="text-accent hover:underline disabled:opacity-50" disabled={libraryBusy || !template.trim()} onClick={() => saveToLibrary(true)}>
+                  Save it as a library prompt
+                </button>
+              </>
+            )}
+          </div>
           <Field label="Prompt name" hint="Shown in runs and SQL (prompt_name); rename it when you change the prompt to compare versions">
             <input className={inputClass} value={promptName} onChange={(e) => setPromptName(e.target.value)} placeholder="Triage rules v1" />
           </Field>

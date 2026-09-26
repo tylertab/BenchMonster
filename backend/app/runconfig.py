@@ -70,6 +70,9 @@ class DatasetRef(BaseModel):
 
 class RunConfig(BaseModel):
     prompt_name: str = Field(min_length=1, max_length=200)
+    # The library prompt version this text came from (provenance only; the text below is what runs).
+    prompt_id: int | None = None
+    prompt_version: int | None = None
     system_prompt: str | None = Field(None, max_length=20000)
     template: str = Field(min_length=1, max_length=50000)
     # Record sources. Empty = a single prompt per model (every variable bound below).
@@ -350,6 +353,18 @@ def _expected_lookup(ref: DatasetRef, exp, exp_rows):
     return lambda i, row: value(ordered[i]) if i < len(ordered) else None
 
 
+async def prompt_link(org_id: int, cfg: RunConfig) -> tuple[int | None, int | None]:
+    """(prompt_id, prompt_version) if that library version exists in the org, else (None, None)."""
+    if not cfg.prompt_id or not cfg.prompt_version:
+        return None, None
+    ok = await db.pool().fetchval(
+        """select 1 from prompt_versions v join prompts p on p.id = v.prompt_id
+           where p.id = $1 and p.org_id = $2 and v.version = $3""",
+        cfg.prompt_id, org_id, cfg.prompt_version,
+    )
+    return (cfg.prompt_id, cfg.prompt_version) if ok else (None, None)
+
+
 def _slug(s: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", s.lower()).strip("-")[:60] or "run"
 
@@ -386,12 +401,13 @@ async def create_run(
         run_id = await conn.fetchval(
             """insert into runs (org_id, name, prompt_name, system_prompt, template, scoring_method, scoring_config,
                    params, total_inputs, output_name, created_by, profile_id, profile_version, bindings, expected_text,
-                   stream_state, system_message)
-               values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17) returning id""",
+                   stream_state, system_message, prompt_id, prompt_version)
+               values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19) returning id""",
             org_id, (name or "").strip() or None, cfg.prompt_name, (cfg.system_prompt or "").strip() or None,
             cfg.template, cfg.scoring_method, cfg.scoring_config, cfg.params(), total,
             output_name(output, label or cfg.prompt_name), user_id, profile_id, profile_version,
             cfg.bindings_json(), (cfg.expected_text or "").strip() or None, stream_state, prepared.system_message,
+            *(await prompt_link(org_id, cfg)),
         )
         await conn.executemany(
             """insert into run_datasets (run_id, position, dataset_id, dataset_name, filename, mapping, expected_column,

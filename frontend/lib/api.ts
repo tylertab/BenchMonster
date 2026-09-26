@@ -29,11 +29,28 @@ export type Prompt = {
   system_prompt: string | null;
   template: string;
   variables: string[];
+  current_version: number;
   created_at: string;
   updated_at: string;
   created_by: string | null;
+  profile_count: number;
   run_count: number;
   last_run_at: string | null;
+};
+
+export type PromptDetail = Prompt & {
+  versions: { version: number; note: string | null; created_at: string; created_by: string | null; changed: string[]; profile_version_count: number }[];
+  used_by: { profile_id: number; profile_name: string; current_version: number; profile_version: number; prompt_version: number }[];
+};
+
+export type PromptVersion = {
+  version: number;
+  system_prompt: string | null;
+  template: string;
+  note: string | null;
+  created_at: string;
+  created_by: string | null;
+  variables: string[];
 };
 
 export type Dataset = {
@@ -262,6 +279,8 @@ export const WHOLE_RECORD = "$record";
 
 /** Everything a benchmark profile version stores (and a run needs). */
 export type ProfileConfig = {
+  prompt_id?: number | null; // the library prompt version the text came from
+  prompt_version?: number | null;
   bindings: Record<string, Binding>;
   expected_text: string | null;
   prompt_name: string;
@@ -277,6 +296,9 @@ export type ProfileConfig = {
 
 export type ProfileVersion = {
   version: number;
+  prompt_id: number | null;
+  prompt_version: number | null;
+  prompt: { id: number; name: string; current_version: number } | null;
   display_bindings: Record<string, Binding & { filename?: string | null }>;
   bindings: Record<string, Binding>;
   expected_text: string | null;
@@ -356,6 +378,8 @@ export function versionToConfig(v: ProfileVersion): ProfileConfig {
     bindings: v.bindings ?? {},
     expected_text: v.expected_text,
     prompt_name: v.prompt_name,
+    prompt_id: v.prompt_id,
+    prompt_version: v.prompt_version,
     system_prompt: v.system_prompt,
     template: v.template,
     datasets: v.datasets
@@ -517,9 +541,11 @@ export const api = {
   removeModel: (id: number) => del<{ ok: boolean }>(`/models/${id}`),
 
   prompts: () => request<Prompt[]>("/prompts"),
-  prompt: (id: number | string) => request<Prompt>(`/prompts/${id}`),
-  createPrompt: (body: { name: string; system_prompt?: string; template: string }) => post<Prompt>("/prompts", body),
-  updatePrompt: (id: number, body: { name: string; system_prompt?: string; template: string }) => put<Prompt>(`/prompts/${id}`, body),
+  prompt: (id: number | string) => request<PromptDetail>(`/prompts/${id}`),
+  promptVersion: (id: number | string, version: number) => request<PromptVersion>(`/prompts/${id}/versions/${version}`),
+  restorePromptVersion: (id: number, version: number) => post<PromptDetail>(`/prompts/${id}/versions/${version}/restore`, {}),
+  createPrompt: (body: { name: string; system_prompt?: string; template: string; note?: string }) => post<PromptDetail>("/prompts", body),
+  updatePrompt: (id: number, body: { name: string; system_prompt?: string; template: string; note?: string }) => put<PromptDetail>(`/prompts/${id}`, body),
   deletePrompt: (id: number) => del<{ ok: boolean }>(`/prompts/${id}`),
 
   datasets: () => request<Dataset[]>("/datasets"),

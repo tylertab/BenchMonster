@@ -50,7 +50,24 @@ export function ProfileConfigView({ v }: { v: ProfileVersion }) {
       </Card>
 
       <Card title={`Prompt · ${v.prompt_name}`} actions={<VariableChips variables={v.variables} />}>
-        {v.system_prompt && <p className="mb-2 text-xs text-ink-2">System: {v.system_prompt}</p>}
+        {v.prompt && (
+          <p className="mb-2 text-xs text-ink-2">
+            From library prompt{" "}
+            <Link href={`/prompts/${v.prompt.id}?version=${v.prompt_version}`} className="font-medium text-accent hover:underline">
+              {v.prompt.name} v{v.prompt_version}
+            </Link>
+            {v.prompt.current_version > (v.prompt_version ?? 0) && <span className="ml-1 rounded bg-warning/15 px-1.5 text-warning">v{v.prompt.current_version} available</span>}
+          </p>
+        )}
+        {v.system_prompt && (
+          <details className="mb-2" open={v.system_prompt.length < 400}>
+            <summary className="cursor-pointer text-xs text-muted">System prompt ({v.system_prompt.length.toLocaleString()} chars)</summary>
+            <div className="mt-1 max-h-60 overflow-auto rounded-md bg-surface-2/60 p-3">
+              <TemplateView template={v.system_prompt} />
+            </div>
+          </details>
+        )}
+        <div className="mb-1 text-xs text-muted">Template</div>
         <div className="max-h-80 overflow-auto rounded-md bg-surface-2/60 p-3">
           <TemplateView template={v.template} />
         </div>

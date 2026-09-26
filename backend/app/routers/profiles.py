@@ -56,7 +56,10 @@ async def _version(profile_id: int, version: int) -> dict:
     )
     out = {k: v[k] for k in ("version", "prompt_name", "system_prompt", "template", "scoring_method",
                              "scoring_config", "model_ids", "params", "note", "created_at", "created_by_name",
-                             "bindings", "expected_text")}
+                             "bindings", "expected_text", "prompt_id", "prompt_version")}
+    # The linked library prompt, and whether it has moved on since.
+    out["prompt"] = dict(p) if v["prompt_id"] and (p := await db.pool().fetchrow(
+        "select id, name, current_version from prompts where id = $1", v["prompt_id"])) else None
     out["display_bindings"] = await runconfig.with_filenames(v["bindings"])
     return {**out, "variables": templates.variables(f'{v["template"]} {v["system_prompt"] or ""}'),
             "datasets": [dict(d) for d in datasets], "models": [dict(m) for m in models]}
@@ -65,6 +68,7 @@ async def _version(profile_id: int, version: int) -> dict:
 def _as_config(v: dict) -> runconfig.RunConfig:
     return runconfig.RunConfig(
         prompt_name=v["prompt_name"], system_prompt=v["system_prompt"], template=v["template"],
+        prompt_id=v.get("prompt_id"), prompt_version=v.get("prompt_version"),
         datasets=[runconfig.DatasetRef(dataset_id=d["dataset_id"] or (None if d["source"] else 0), mapping=d["mapping"],
                                        source=d["source"], fields=d["fields"],
                                        expected_column=d["expected_column"],
@@ -110,13 +114,15 @@ async def _insert_version(conn, profile_id: int, cfg: runconfig.RunConfig, datas
     version = await conn.fetchval(
         "select coalesce(max(version), 0) + 1 from profile_versions where profile_id = $1", profile_id
     )
+    org_id = await conn.fetchval("select org_id from benchmark_profiles where id = $1", profile_id)
     version_id = await conn.fetchval(
         """insert into profile_versions (profile_id, version, prompt_name, system_prompt, template, scoring_method,
-               scoring_config, model_ids, params, note, created_by, bindings, expected_text)
-           values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) returning id""",
+               scoring_config, model_ids, params, note, created_by, bindings, expected_text, prompt_id, prompt_version)
+           values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) returning id""",
         profile_id, version, cfg.prompt_name.strip(), (cfg.system_prompt or "").strip() or None, cfg.template,
         cfg.scoring_method, cfg.scoring_config, sorted(set(cfg.model_ids)), cfg.params(),
         (note or "").strip() or None, user_id, cfg.bindings_json(), (cfg.expected_text or "").strip() or None,
+        *(await runconfig.prompt_link(org_id, cfg)),
     )
     await conn.executemany(
         """insert into profile_version_datasets (version_id, position, dataset_id, dataset_name, filename, mapping,
