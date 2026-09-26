@@ -66,6 +66,9 @@ export function Header() {
             <Link href="/runs" className="text-sm text-ink-2 hover:text-ink">
               Runs
             </Link>
+            <Link href="/bmquery" className="text-sm text-ink-2 hover:text-ink">
+              BMQuery
+            </Link>
             <Link href="/prompts" className="text-sm text-ink-2 hover:text-ink">
               Prompts
             </Link>

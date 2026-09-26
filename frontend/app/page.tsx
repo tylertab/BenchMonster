@@ -25,6 +25,9 @@ export default function ProfilesHome() {
         <Link href="/runs" className="ml-auto text-sm text-accent hover:underline">
           All runs →
         </Link>
+        <Link href="/bmquery" className="rounded-md border border-line bg-surface px-3 py-1.5 text-sm font-medium hover:bg-surface-2">
+          Query with BMQuery
+        </Link>
         <Link href="/profiles/new" className="rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-white hover:opacity-90">
           New profile
         </Link>

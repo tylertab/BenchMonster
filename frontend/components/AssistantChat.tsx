@@ -2,18 +2,13 @@
 
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { api, type ChatMessage, type ToolCall } from "@/lib/api";
+import { type BMQueryScope, scopeKey, suggestions } from "@/lib/bmquery";
 import { useVoice } from "@/lib/useVoice";
 import { ResultTable } from "./SqlConsole";
 import { Button, Card } from "./ui";
 
 const MAX_INPUT_PX = 240; // about 10 lines
 
-const SUGGESTIONS = [
-  "Which model is the best value, and why?",
-  "Where do the models disagree most?",
-  "Why did the failures happen?",
-  "Is the fastest model also the most accurate?",
-];
 
 // Minimal markdown: **bold**, `code`, and line breaks. Enough for chat replies.
 function Markdown({ text }: { text: string }) {
@@ -68,13 +63,13 @@ function ToolCallView({ call, onOpenSql }: { call: ToolCall; onOpenSql: (sql: st
 }
 
 export function AssistantChat({
-  runId,
+  scope,
   onOpenSql,
   headerActions,
   messages,
   setMessages,
 }: {
-  runId: number;
+  scope: BMQueryScope;
   onOpenSql: (sql: string) => void;
   headerActions?: ReactNode;
   messages: ChatMessage[];
@@ -97,8 +92,10 @@ export function AssistantChat({
   }, [input]);
 
   useEffect(() => {
-    api.chatHistory(runId).then(setMessages);
-  }, [runId, setMessages]);
+    api.chatHistory(scope).then(setMessages);
+    // scopeKey identifies the scope; the object itself is recreated each render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scopeKey(scope), setMessages]);
 
   useEffect(() => {
     bottom.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
@@ -111,7 +108,7 @@ export function AssistantChat({
     const tempId = -Date.now();
     setMessages((m) => [...m, { id: tempId, role: "user", content: text, tool_calls: null }]);
     try {
-      const r = await api.chat(runId, text);
+      const r = await api.chat(scope, text);
       setMessages((m) => [...m, { id: r.id, role: "assistant", content: r.reply, tool_calls: r.tool_calls }]);
       if (speakReplies) voice.speak(r.reply);
     } catch (e) {
@@ -129,7 +126,7 @@ export function AssistantChat({
     if (!clip) return voice.setState("idle");
     setBusy(true);
     try {
-      const r = await api.voiceTurn(runId, clip);
+      const r = await api.voiceTurn(scope, clip);
       setMessages((m) => [
         ...m,
         { id: -Date.now(), role: "user", content: `🎙️ ${r.transcript}`, tool_calls: null },
@@ -148,7 +145,7 @@ export function AssistantChat({
 
   return (
     <Card
-      title="AI analyst"
+      title="BMQuery analyst"
       actions={
         <>
           {headerActions}
@@ -164,9 +161,12 @@ export function AssistantChat({
         <div className="flex-1 space-y-4 overflow-y-auto pr-1">
           {messages.length === 0 && (
             <div className="space-y-2 pt-4 text-sm text-ink-2">
-              <p>Ask anything about this run. I query the results with SQL and remember key findings across sessions.</p>
+              <p>
+                Ask anything about {scope.kind === "run" ? "this run" : scope.kind === "profile" ? "this benchmark and its versions" : "all your benchmarks"}. I query the
+                results with SQL and remember key findings across sessions.
+              </p>
               <div className="flex flex-wrap gap-1.5 pt-1">
-                {SUGGESTIONS.map((s) => (
+                {suggestions(scope).map((s) => (
                   <button key={s} type="button" onClick={() => send(s)} className="rounded-full border border-line px-2.5 py-1 text-xs hover:bg-surface-2">
                     {s}
                   </button>
@@ -211,7 +211,7 @@ export function AssistantChat({
                 send(input);
               }
             }}
-            placeholder="Ask about this run…  (Shift+Enter for a new line)"
+            placeholder="Ask BMQuery…  (Shift+Enter for a new line)"
             aria-label="Message the AI analyst"
             className="min-w-0 flex-1 resize-none rounded-md border border-line bg-surface px-3 py-2 text-sm leading-5 outline-none focus:border-accent"
           />

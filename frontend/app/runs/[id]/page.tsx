@@ -110,8 +110,8 @@ export default function RunPage() {
               </button>
             </>
           )}
-          <Link href={`/runs/${run.id}/review`} className="rounded-md bg-accent px-4 py-2 text-sm font-medium text-white hover:opacity-90">
-            Review with SQL & AI →
+          <Link href={`/bmquery?run=${run.id}`} className="rounded-md bg-accent px-4 py-2 text-sm font-medium text-white hover:opacity-90">
+            Analyze with BMQuery →
           </Link>
         </div>
       </div>

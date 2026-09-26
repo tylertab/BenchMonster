@@ -77,6 +77,9 @@ function ProfileView() {
           <Link href={`/profiles/${id}/edit`} className="rounded-md border border-line bg-surface px-3 py-1.5 text-sm font-medium hover:bg-surface-2">
             Edit
           </Link>
+          <Link href={`/bmquery?profile=${id}`} className="rounded-md border border-accent/50 bg-accent/5 px-3 py-1.5 text-sm font-medium text-accent hover:bg-accent/10">
+            Analyze this benchmark with BMQuery
+          </Link>
           <Button onClick={() => setLaunch(true)} disabled={!v}>
             Run v{v?.version ?? requested}
           </Button>

@@ -1,5 +1,7 @@
 // Typed client for the FastAPI backend (same-origin /api).
 
+import { type BMQueryScope, scopeParams } from "./bmquery";
+
 export type Model = {
   id: number;
   provider: string;
@@ -391,15 +393,15 @@ export const api = {
   updateQuery: (id: number, name: string, sql: string) => put<SavedQuery>(`/saved-queries/${id}`, { name, sql }),
   deleteQuery: (id: number) => del<{ ok: boolean }>(`/saved-queries/${id}`),
 
-  chatHistory: (runId: number | string) => request<ChatMessage[]>(`/runs/${runId}/chat`),
-  chat: (runId: number | string, message: string) =>
-    post<{ id: number; reply: string; tool_calls: ToolCall[] }>(`/runs/${runId}/chat`, { message }),
+  chatHistory: (scope: BMQueryScope) => request<ChatMessage[]>(`/bmquery/chat${scopeParams(scope)}`),
+  chat: (scope: BMQueryScope, message: string) =>
+    post<{ id: number; reply: string; tool_calls: ToolCall[] }>(`/bmquery/chat${scopeParams(scope)}`, { message }),
 
-  voiceTurn: (runId: number | string, audio: Blob) => {
+  voiceTurn: (scope: BMQueryScope, audio: Blob) => {
     const form = new FormData();
     const ext = audio.type.includes("mp4") ? "m4a" : audio.type.includes("ogg") ? "ogg" : "webm";
     form.append("audio", audio, `clip.${ext}`);
-    return request<{ transcript: string; id: number; reply: string; tool_calls: ToolCall[] }>(`/runs/${runId}/voice`, {
+    return request<{ transcript: string; id: number; reply: string; tool_calls: ToolCall[] }>(`/bmquery/voice${scopeParams(scope)}`, {
       method: "POST",
       body: form,
     });
