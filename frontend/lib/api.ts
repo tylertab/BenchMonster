@@ -431,7 +431,7 @@ export type OrgDetails = {
   invitations: { id: number; email: string; role: Role; created_at: string; expires_at: string }[];
 };
 
-export type SavedQuery = { id: number; name: string; sql: string; created_by?: string | null; updated_at: string };
+export type SavedQuery = { id: number; name: string; sql: string; connection_id: number | null; connection_name?: string | null; created_by?: string | null; updated_at: string };
 
 export class ApiError extends Error {
   constructor(message: string, public status: number) {
@@ -559,13 +559,14 @@ export const api = {
     request<Result[]>(`/runs/${id}/results${qs({ model_id: opts.modelId, only_failed: opts.onlyFailed || undefined, limit: opts.limit ?? 500 })}`),
   predictionsUrl: (id: number | string) => `/api/runs/${id}/predictions`,
 
-  query: (sql: string) => post<QueryResult>("/query", { sql }),
+  /** connectionId: query a Postgres connection instead of BenchMonster's own data. */
+  query: (sql: string, connectionId: number | null = null) => post<QueryResult>("/query", { sql, connection_id: connectionId }),
   /** Run SQL and download every row (up to 50,000) as CSV or JSON. */
-  exportQuery: async (sql: string, format: "csv" | "json", filename?: string) => {
+  exportQuery: async (sql: string, format: "csv" | "json", filename?: string, connectionId: number | null = null) => {
     const res = await fetch("/api/query/export", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ sql, format, filename }),
+      body: JSON.stringify({ sql, format, filename, connection_id: connectionId }),
     });
     if (!res.ok) {
       let detail = `${res.status} ${res.statusText}`;
@@ -576,10 +577,11 @@ export const api = {
     }
     return { blob: await res.blob(), filename: filenameFrom(res, `bmquery.${format}`), rows: Number(res.headers.get("x-row-count") ?? 0) };
   },
-  schema: () => request<SchemaTable[]>("/query/schema"),
+  schema: (connectionId: number | null = null) => request<SchemaTable[]>(`/query/schema${connectionId ? `?connection_id=${connectionId}` : ""}`),
   savedQueries: () => request<SavedQuery[]>("/saved-queries"),
-  saveQuery: (name: string, sql: string) => post<SavedQuery>("/saved-queries", { name, sql }),
-  updateQuery: (id: number, name: string, sql: string) => put<SavedQuery>(`/saved-queries/${id}`, { name, sql }),
+  saveQuery: (name: string, sql: string, connectionId: number | null = null) => post<SavedQuery>("/saved-queries", { name, sql, connection_id: connectionId }),
+  updateQuery: (id: number, name: string, sql: string, connectionId: number | null = null) =>
+    put<SavedQuery>(`/saved-queries/${id}`, { name, sql, connection_id: connectionId }),
   deleteQuery: (id: number) => del<{ ok: boolean }>(`/saved-queries/${id}`),
 
   chatHistory: (scope: BMQueryScope) => request<ChatMessage[]>(`/bmquery/chat${scopeParams(scope)}`),

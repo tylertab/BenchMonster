@@ -34,7 +34,7 @@ export default function ConnectionsPage() {
   };
 
   const remove = async (c: Connection) => {
-    if (!window.confirm(`Delete ${c.name}? Datasets imported from it keep their rows but can't be refreshed.`)) return;
+    if (!window.confirm(`Delete ${c.name}? Datasets imported from it keep their rows but can't be refreshed, and saved queries on it are deleted.`)) return;
     await api.deleteConnection(c.id).catch((e) => setError(e.message));
     load();
   };

@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { api, ApiError, type QueryResult, type SavedQuery, type SchemaTable } from "@/lib/api";
+import { useEffect, useRef, useState } from "react";
+import { api, ApiError, type Connection, type QueryResult, type SavedQuery, type SchemaTable } from "@/lib/api";
 import { saveBlob } from "@/lib/download";
-import { Button, Card, ErrorNote, inputClass } from "./ui";
+import { Button, Card, compactInputClass, ErrorNote, inputClass } from "./ui";
 
 function cell(v: unknown) {
   if (v === null || v === undefined) return <span className="text-muted">null</span>;
@@ -58,6 +58,15 @@ export function SqlConsole({ sql, onSqlChange }: { sql: string; onSqlChange: (s:
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [openTable, setOpenTable] = useState<string | null>("results");
+  // Where queries run: BenchMonster's own data (null) or a Postgres connection.
+  const [source, setSource] = useState<number | null>(null);
+  const [pgConns, setPgConns] = useState<Connection[]>([]);
+  const sourceConn = pgConns.find((c) => c.id === source);
+  // Latest editor text, so a slow schema load doesn't overwrite what was typed meanwhile.
+  const sqlRef = useRef(sql);
+  useEffect(() => {
+    sqlRef.current = sql;
+  }, [sql]);
 
   // Saved queries (shared across the org). `active` is the one loaded in the editor.
   // "Save as…" always creates a new query; only "Update" overwrites the active one.
@@ -69,7 +78,7 @@ export function SqlConsole({ sql, onSqlChange }: { sql: string; onSqlChange: (s:
     setExporting(format);
     setError(null);
     try {
-      const f = await api.exportQuery(resultSql, format, active && resultSql === active.sql ? active.name : undefined);
+      const f = await api.exportQuery(resultSql, format, active && resultSql === active.sql ? active.name : undefined, source);
       saveBlob(f.blob, f.filename);
     } catch (e) {
       setError((e as Error).message);
@@ -89,12 +98,12 @@ export function SqlConsole({ sql, onSqlChange }: { sql: string; onSqlChange: (s:
     try {
       let q: SavedQuery;
       try {
-        q = await api.saveQuery(name, sql);
+        q = await api.saveQuery(name, sql, source);
       } catch (e) {
         const existing = saved.find((s) => s.name.toLowerCase() === name.toLowerCase());
         if (!(e instanceof ApiError && e.status === 409 && existing)) throw e;
         if (!window.confirm(`A saved query named "${existing.name}" already exists. Replace it?`)) return;
-        q = await api.updateQuery(existing.id, existing.name, sql);
+        q = await api.updateQuery(existing.id, existing.name, sql, source);
       }
       setActive(q);
       setSaveName(null);
@@ -108,7 +117,7 @@ export function SqlConsole({ sql, onSqlChange }: { sql: string; onSqlChange: (s:
     if (!active) return;
     setError(null);
     try {
-      setActive(await api.updateQuery(active.id, active.name, sql));
+      setActive(await api.updateQuery(active.id, active.name, sql, source));
       await refreshSaved();
     } catch (e) {
       setError((e as Error).message);
@@ -120,7 +129,7 @@ export function SqlConsole({ sql, onSqlChange }: { sql: string; onSqlChange: (s:
     if (!name || name === q.name) return;
     setError(null);
     try {
-      const updated = await api.updateQuery(q.id, name, q.sql);
+      const updated = await api.updateQuery(q.id, name, q.sql, q.connection_id);
       if (active?.id === q.id) setActive(updated);
       await refreshSaved();
     } catch (e) {
@@ -131,7 +140,28 @@ export function SqlConsole({ sql, onSqlChange }: { sql: string; onSqlChange: (s:
   const load = (q: SavedQuery) => {
     setActive(q);
     onSqlChange(q.sql);
-    run(q.sql);
+    if (q.connection_id !== source) switchSource(q.connection_id, false);
+    run(q.sql, q.connection_id);
+  };
+
+  /** Point the console at another source; its schema replaces the sidebar. */
+  const switchSource = (id: number | null, sample = true) => {
+    const before = sql;
+    setSource(id);
+    setResult(null);
+    setError(null);
+    setSchema([]);
+    api.schema(id).then(
+      (tables) => {
+        setSchema(tables);
+        setOpenTable(id === null ? "results" : tables[0]?.name ?? null);
+        if (sample && id !== null && tables[0] && sqlRef.current === before) {
+          setActive(null);
+          onSqlChange(`select *\nfrom ${tables[0].name}\nlimit 100`);
+        }
+      },
+      (e) => setError(e.message),
+    );
   };
 
   const remove = async (q: SavedQuery) => {
@@ -144,6 +174,7 @@ export function SqlConsole({ sql, onSqlChange }: { sql: string; onSqlChange: (s:
   useEffect(() => {
     api.schema().then(setSchema);
     api.savedQueries().then(setSaved);
+    api.connections().then((cs) => setPgConns(cs.filter((c) => c.kind === "postgres" && c.access?.read)), () => {});
     // Show the default query's result on first load.
     api.query(sql).then((r) => {
       setResult(r);
@@ -152,11 +183,11 @@ export function SqlConsole({ sql, onSqlChange }: { sql: string; onSqlChange: (s:
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const run = async (text = sql) => {
+  const run = async (text = sql, on = source) => {
     setBusy(true);
     setError(null);
     try {
-      setResult(await api.query(text));
+      setResult(await api.query(text, on));
       setResultSql(text);
     } catch (e) {
       setResult(null);
@@ -170,7 +201,21 @@ export function SqlConsole({ sql, onSqlChange }: { sql: string; onSqlChange: (s:
   return (
     <Card
       title="SQL console"
-      actions={<span className="text-xs text-muted">read-only · your org&apos;s data · 5s timeout</span>}
+      actions={
+        <span className="flex items-center gap-2 text-xs text-muted">
+          {pgConns.length > 0 && (
+            <select className={`${compactInputClass} max-w-52 py-0.5 text-xs`} value={source ?? ""} onChange={(e) => switchSource(e.target.value ? Number(e.target.value) : null)} aria-label="Query source">
+              <option value="">BenchMonster data</option>
+              {pgConns.map((c) => (
+                <option key={c.id} value={c.id}>
+                  ⇄ {c.name}
+                </option>
+              ))}
+            </select>
+          )}
+          {sourceConn ? "read-only · 15s timeout" : <>read-only · your org&apos;s data · 5s timeout</>}
+        </span>
+      }
       className="flex min-w-0 flex-col"
     >
       <div className="grid gap-3 md:grid-cols-[minmax(13rem,16rem)_minmax(0,1fr)]">
@@ -189,6 +234,7 @@ export function SqlConsole({ sql, onSqlChange }: { sql: string; onSqlChange: (s:
                     className={`flex-1 truncate rounded px-1 py-0.5 text-left hover:bg-surface-2 ${active?.id === q.id ? "bg-accent/10 font-medium text-accent" : ""}`}
                   >
                     ★ {q.name}
+                    {q.connection_name && <span className="text-muted"> ⇄ {q.connection_name}</span>}
                     {active?.id === q.id && dirty && <span className="text-muted"> •</span>}
                   </button>
                   <button type="button" onClick={() => rename(q)} className="invisible px-0.5 text-muted hover:text-ink group-hover:visible" aria-label={`Rename ${q.name}`}>
@@ -201,7 +247,7 @@ export function SqlConsole({ sql, onSqlChange }: { sql: string; onSqlChange: (s:
               ))}
             </ul>
           )}
-          <div className="mb-1 font-medium text-muted">Views</div>
+          <div className="mb-1 font-medium text-muted">{sourceConn ? `Tables in ${sourceConn.name}` : "Views"}</div>
           {schema.map((t) => (
             <div key={t.name}>
               <button type="button" className="flex w-full gap-1 py-0.5 text-left font-mono font-medium hover:text-accent" title={t.name} onClick={() => setOpenTable(openTable === t.name ? null : t.name)}>

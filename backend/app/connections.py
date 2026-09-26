@@ -443,6 +443,74 @@ async def pg_write(cfg: PgConfig, sec: PgSecret, writes: list[tuple[str, dict[st
     return written
 
 
+def _plain(v):
+    if v is None or isinstance(v, (bool, int, float, str)):
+        return v
+    if isinstance(v, decimal.Decimal):
+        return float(v)
+    return _cell(v)
+
+
+async def pg_query(cfg: PgConfig, sec: PgSecret, sql: str, max_rows: int) -> dict:
+    """Run SQL in a read-only transaction that is always rolled back (BMQuery on a connection)."""
+    import time
+
+    sql = sql.strip().rstrip(";")
+    if not sql:
+        raise ConnectionError_("empty query")
+    start = time.perf_counter()
+    conn = await pg_connect(cfg, sec)
+    try:
+        tr = conn.transaction(readonly=True)
+        await tr.start()
+        try:
+            await conn.execute(f"set local statement_timeout = '{PG_TIMEOUT_S}s'")
+            stmt = await conn.prepare(sql)
+            columns = [{"name": a.name, "type": a.type.name} for a in stmt.get_attributes()]
+            rows = []
+            if columns:
+                async for r in stmt.cursor():
+                    rows.append(r)
+                    if len(rows) > max_rows:
+                        break
+            else:
+                await stmt.fetch()
+        except asyncpg.PostgresError as e:
+            raise ConnectionError_(f"{type(e).__name__}: {e}")
+        finally:
+            await tr.rollback()
+    finally:
+        await conn.close()
+    truncated = len(rows) > max_rows
+    rows = rows[:max_rows]
+    return {
+        "columns": columns, "rows": [[_plain(v) for v in r.values()] for r in rows], "row_count": len(rows),
+        "truncated": truncated, "elapsed_ms": round((time.perf_counter() - start) * 1000, 1),
+    }
+
+
+async def pg_schema(cfg: PgConfig, sec: PgSecret) -> list[dict]:
+    """Readable tables and their columns, named like the console expects (schema-qualified unless public)."""
+    conn = await pg_connect(cfg, sec)
+    try:
+        rows = await conn.fetch(
+            """select c.table_schema, c.table_name, c.column_name, c.data_type
+               from information_schema.columns c
+               where c.table_schema not in ('pg_catalog', 'information_schema', 'toolkit_experimental')
+                 and c.table_schema !~ '^_?timescaledb'
+                 and has_table_privilege(quote_ident(c.table_schema) || '.' || quote_ident(c.table_name), 'SELECT')
+               order by c.table_schema = 'public' desc, c.table_schema, c.table_name, c.ordinal_position
+               limit 5000"""
+        )
+    finally:
+        await conn.close()
+    tables: dict[str, list] = {}
+    for r in rows:
+        name = r["table_name"] if r["table_schema"] == "public" else f"{r['table_schema']}.{r['table_name']}"
+        tables.setdefault(name, []).append({"name": r["column_name"], "type": r["data_type"]})
+    return [{"name": t, "columns": cols} for t, cols in tables.items()]
+
+
 # --- dispatch ----------------------------------------------------------------------
 
 
