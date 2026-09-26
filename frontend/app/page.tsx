@@ -1,26 +1,39 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { METHODS } from "@/components/ScoringConfig";
-import { Card, Empty, ErrorNote } from "@/components/ui";
+import { Card, compactInputClass, Empty, ErrorNote, inputClass } from "@/components/ui";
 import { api, type ProfileListItem } from "@/lib/api";
 import { pct, when } from "@/lib/format";
 
+type Sort = "updated" | "name" | "runs";
+
 export default function ProfilesHome() {
+  const router = useRouter();
   const [profiles, setProfiles] = useState<ProfileListItem[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [q, setQ] = useState("");
+  const [sort, setSort] = useState<Sort>("updated");
 
   useEffect(() => {
     api.profiles().then(setProfiles, (e) => setError(e.message));
   }, []);
+
+  const term = q.trim().toLowerCase();
+  const shown = (profiles ?? [])
+    .filter((p) => !term || [p.name, p.description, p.prompt_name, ...p.input_files].some((s) => s?.toLowerCase().includes(term)))
+    .sort((a, b) =>
+      sort === "name" ? a.name.localeCompare(b.name) : sort === "runs" ? b.run_count - a.run_count : b.updated_at.localeCompare(a.updated_at),
+    );
 
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-end gap-4">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Benchmark profiles</h1>
-          <p className="mt-1 text-sm text-ink-2">A profile is a prompt + input sets + output expectations + models. Edit it to create a new version; runs record which version they used.</p>
+          <p className="mt-1 text-sm text-ink-2">A profile is a prompt + inputs + expected outputs + models. Edit it to create a new version; runs record which version they used.</p>
         </div>
         <Link href="/runs" className="ml-auto text-sm text-accent hover:underline">
           All runs →
@@ -32,57 +45,91 @@ export default function ProfilesHome() {
           New profile
         </Link>
       </div>
+
+      <div className="flex flex-wrap items-center gap-2">
+        <input className={`${inputClass} max-w-sm`} placeholder="Search names, prompts, input files…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search profiles" />
+        <select className={compactInputClass} value={sort} onChange={(e) => setSort(e.target.value as Sort)} aria-label="Sort profiles">
+          <option value="updated">Recently updated</option>
+          <option value="name">Name</option>
+          <option value="runs">Most runs</option>
+        </select>
+      </div>
+
       <ErrorNote error={error} />
-      {profiles === null ? (
-        <Empty>Loading…</Empty>
-      ) : profiles.length === 0 ? (
-        <Card>
+      <Card>
+        {profiles === null ? (
+          <Empty>Loading…</Empty>
+        ) : shown.length === 0 ? (
           <Empty>
-            No benchmark profiles yet.{" "}
-            <Link href="/profiles/new" className="text-accent underline">
-              Create your first one
-            </Link>
-            .
+            {profiles.length === 0 ? (
+              <>
+                No benchmark profiles yet.{" "}
+                <Link href="/profiles/new" className="text-accent underline">
+                  Create your first one
+                </Link>
+                .
+              </>
+            ) : (
+              "No profiles match."
+            )}
           </Empty>
-        </Card>
-      ) : (
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-          {profiles.map((p) => (
-            <Link key={p.id} href={`/profiles/${p.id}`} className="flex flex-col rounded-lg border border-line bg-surface p-4 hover:border-accent/50">
-              <div className="flex items-start gap-2">
-                <span className="font-medium">{p.name}</span>
-                <span className="ml-auto shrink-0 rounded-full bg-accent/10 px-2 py-0.5 text-xs font-medium text-accent">v{p.current_version}</span>
-              </div>
-              {p.description && <p className="mt-1 line-clamp-2 text-sm text-ink-2">{p.description}</p>}
-              <dl className="mt-3 space-y-1 text-xs text-ink-2">
-                <div>
-                  <dt className="inline text-muted">Prompt · </dt>
-                  <dd className="inline">{p.prompt_name}</dd>
-                </div>
-                <div className="truncate">
-                  <dt className="inline text-muted">Inputs · </dt>
-                  <dd className="inline font-mono">{p.input_files.join(", ")}</dd>
-                </div>
-                <div>
-                  <dt className="inline text-muted">Scoring · </dt>
-                  <dd className="inline">{METHODS.find((m) => m.value === p.scoring_method)?.label ?? p.scoring_method}</dd>
-                  <span className="text-muted">
-                    {" "}
-                    · {p.model_count} model{p.model_count === 1 ? "" : "s"}
-                  </span>
-                </div>
-              </dl>
-              <div className="mt-auto flex items-center gap-3 border-t border-line pt-3 text-xs">
-                <span className="tabular">
-                  {p.run_count} run{p.run_count === 1 ? "" : "s"}
-                </span>
-                {p.current_best_accuracy != null && <span className="tabular text-ink-2">best on v{p.current_version}: {pct(p.current_best_accuracy, 1)}</span>}
-                <span className="ml-auto text-muted">{p.last_run_at ? `last run ${when(p.last_run_at)}` : "never run"}</span>
-              </div>
-            </Link>
-          ))}
-        </div>
-      )}
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="text-left text-xs text-muted">
+                <tr>
+                  <th className="pb-2 font-medium">Profile</th>
+                  <th className="pb-2 font-medium">Version</th>
+                  <th className="pb-2 font-medium">Prompt</th>
+                  <th className="pb-2 font-medium">Record inputs</th>
+                  <th className="pb-2 font-medium">Scoring</th>
+                  <th className="pb-2 text-right font-medium">Models</th>
+                  <th className="pb-2 text-right font-medium">Runs</th>
+                  <th className="whitespace-nowrap pb-2 pl-3 text-right font-medium">Best acc. (current)</th>
+                  <th className="pb-2 pl-4 text-right font-medium">Last run</th>
+                </tr>
+              </thead>
+              <tbody>
+                {shown.map((p) => (
+                  <tr key={p.id} onClick={() => router.push(`/profiles/${p.id}`)} className="cursor-pointer border-t border-line align-top hover:bg-surface-2/60">
+                    <td className="max-w-xs py-2.5 pr-3">
+                      <Link href={`/profiles/${p.id}`} className="font-medium hover:text-accent" onClick={(e) => e.stopPropagation()}>
+                        {p.name}
+                      </Link>
+                      {p.description && <div className="line-clamp-2 text-xs text-muted">{p.description}</div>}
+                    </td>
+                    <td className="py-2.5 pr-3">
+                      <span className="rounded-full bg-accent/10 px-2 py-0.5 text-xs font-medium text-accent">v{p.current_version}</span>
+                    </td>
+                    <td className="max-w-[12rem] py-2.5 pr-3 text-ink-2">{p.prompt_name}</td>
+                    <td className="max-w-[14rem] py-2.5 pr-3">
+                      {p.input_files.length ? (
+                        <div className="flex flex-col items-start gap-1">
+                          {p.input_files.map((f, i) => (
+                            <span key={i} className="max-w-full truncate rounded bg-surface-2 px-1.5 py-0.5 font-mono text-xs text-ink-2" title={f}>
+                              ↳ {f}
+                            </span>
+                          ))}
+                        </div>
+                      ) : (
+                        <span className="text-xs text-muted">single prompt</span>
+                      )}
+                    </td>
+                    <td className="py-2.5 pr-3 text-xs text-ink-2">{METHODS.find((m) => m.value === p.scoring_method)?.label ?? p.scoring_method}</td>
+                    <td className="tabular py-2.5 text-right">{p.model_count}</td>
+                    <td className="tabular py-2.5 text-right">{p.run_count}</td>
+                    <td className="tabular py-2.5 pl-3 text-right">{pct(p.current_best_accuracy, 1)}</td>
+                    <td className="whitespace-nowrap py-2.5 pl-4 text-right text-xs text-ink-2">{p.last_run_at ? when(p.last_run_at) : "never"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <div className="mt-3 text-xs text-ink-2">
+              {shown.length} profile{shown.length === 1 ? "" : "s"}
+            </div>
+          </div>
+        )}
+      </Card>
     </div>
   );
 }
