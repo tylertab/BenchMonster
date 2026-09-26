@@ -1,0 +1,7 @@
+order_ref,tier,sku,bought_on,amount_paid,opened,condition,message
+EU-2001,standard,TB-010,2026-09-15,449,true,used,"Bitte erstatten, gefällt mir nicht."
+EU-2002,plus,PH-310,2026-09-05,399,true,like_new,"Please refund, plus member here."
+EU-2003,standard,HP-020,2026-08-27,129,false,sealed,"Unopened, never needed them."
+EU-2004,standard,MN-270,2026-09-01,329,true,defective,Dead pixels everywhere.
+EU-2005,standard,WT-050,2026-09-12,249,false,sealed,"Still in the box, can I return it?"
+EU-2006,standard,NB-200,2026-09-19,1499,true,like_new,The laptop is great but too heavy for me.

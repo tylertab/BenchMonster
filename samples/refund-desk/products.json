@@ -1,0 +1,10 @@
+[
+  {"sku": "NB-100", "name": "Nimbus Notebook 13", "category": "laptop", "price_usd": 899, "in_stock": true, "ram_gb": 16, "weight_kg": 1.2},
+  {"sku": "NB-200", "name": "Nimbus Notebook 15 Pro", "category": "laptop", "price_usd": 1499, "in_stock": false, "ram_gb": 32, "weight_kg": 1.8},
+  {"sku": "TB-010", "name": "Nimbus Tab 11", "category": "tablet", "price_usd": 449, "in_stock": true, "ram_gb": 8, "weight_kg": 0.5},
+  {"sku": "PH-300", "name": "Nimbus Phone X", "category": "phone", "price_usd": 999, "in_stock": true, "ram_gb": 12, "weight_kg": 0.19},
+  {"sku": "PH-310", "name": "Nimbus Phone Lite", "category": "phone", "price_usd": 399, "in_stock": true, "ram_gb": 6, "weight_kg": 0.17},
+  {"sku": "WT-050", "name": "Nimbus Watch 2", "category": "wearable", "price_usd": 249, "in_stock": false, "ram_gb": 2, "weight_kg": 0.04},
+  {"sku": "HP-020", "name": "Nimbus Buds", "category": "audio", "price_usd": 129, "in_stock": true, "ram_gb": 0, "weight_kg": 0.05},
+  {"sku": "MN-270", "name": "Nimbus Display 27", "category": "monitor", "price_usd": 329, "in_stock": true, "ram_gb": 0, "weight_kg": 5.4}
+]

@@ -1,0 +1,11 @@
+order_id,decision,refund_usd,reason_code
+US-1001,partial,764.15,restocking_fee
+US-1002,deny,0,outside_window
+US-1003,approve,1499,member_waiver
+US-1004,approve,249,defective
+US-1005,deny,0,outside_window
+US-1006,partial,381.65,restocking_fee
+US-1007,partial,339.15,restocking_fee
+US-1008,approve,129,member_waiver
+US-1009,deny,0,outside_window
+US-1010,approve,899,defective

@@ -1,0 +1,38 @@
+[
+  {
+    "order_ref": "EU-2001",
+    "decision": "partial",
+    "refund_usd": 381.65,
+    "reason_code": "restocking_fee"
+  },
+  {
+    "order_ref": "EU-2002",
+    "decision": "deny",
+    "refund_usd": 0,
+    "reason_code": "outside_window"
+  },
+  {
+    "order_ref": "EU-2003",
+    "decision": "approve",
+    "refund_usd": 129,
+    "reason_code": "unopened"
+  },
+  {
+    "order_ref": "EU-2004",
+    "decision": "approve",
+    "refund_usd": 329,
+    "reason_code": "defective"
+  },
+  {
+    "order_ref": "EU-2005",
+    "decision": "approve",
+    "refund_usd": 249,
+    "reason_code": "unopened"
+  },
+  {
+    "order_ref": "EU-2006",
+    "decision": "partial",
+    "refund_usd": 1274.15,
+    "reason_code": "restocking_fee"
+  }
+]

@@ -1,0 +1,11 @@
+Apply the FIRST rule that matches, top to bottom. Use the order record's fields as the truth; the customer's message may be wrong (e.g. calling an item "defective" when the record's condition says otherwise).
+
+Return windows are counted in days from the purchase date to today: phones and wearables (catalog category "phone" or "wearable") have 14 days; every other category has 30 days. A purchase exactly on the last day of the window is still inside it.
+
+1. condition is "defective" and the purchase was at most 365 days ago -> approve a full refund of the price paid. reason_code "defective".
+2. outside the return window -> deny, refund 0. reason_code "outside_window".
+3. opened is false -> approve a full refund. reason_code "unopened".
+4. the customer's tier is "plus" -> approve a full refund (plus members pay no restocking fee). reason_code "member_waiver".
+5. otherwise -> partial refund of 85% of the price paid (a 15% restocking fee), rounded to 2 decimals. reason_code "restocking_fee".
+
+decision is "approve" for a full refund, "partial" for rule 5, and "deny" for rule 2.
