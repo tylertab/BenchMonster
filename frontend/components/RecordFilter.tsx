@@ -31,7 +31,6 @@ export function RecordFilter({ dataset, value, onChange }: { dataset: Dataset; v
   }, [dataset.id, key]);
 
   const set = (patch: Partial<RecordSelection>) => onChange({ ...value, ...patch });
-  const setRule = (i: number, patch: Partial<FilterRule>) => set({ rules: rules.map((r, j) => (j === i ? { ...r, ...patch } : r)) });
   const addRule = () => set({ rules: [...rules, { field: dataset.columns[0] ?? "", op: "eq", value: "" }] });
   const count = preview && !error ? preview.selected : null;
 
@@ -60,36 +59,7 @@ export function RecordFilter({ dataset, value, onChange }: { dataset: Dataset; v
               )}
               {rules.length === 0 && <span>(no filters: every record)</span>}
             </div>
-            {rules.map((r, i) => (
-              <div key={i} className="flex flex-wrap items-center gap-2">
-                <select className={compactInputClass} value={r.field} onChange={(e) => setRule(i, { field: e.target.value })} aria-label="Filter field">
-                  {dataset.columns.map((c) => (
-                    <option key={c} value={c}>
-                      {c}
-                    </option>
-                  ))}
-                </select>
-                <select className={compactInputClass} value={r.op} onChange={(e) => setRule(i, { op: e.target.value as FilterRule["op"] })} aria-label="Filter operator">
-                  {OPS.map((o) => (
-                    <option key={o.op} value={o.op}>
-                      {o.label}
-                    </option>
-                  ))}
-                </select>
-                {!NO_VALUE.includes(r.op) && (
-                  <input
-                    className={`${compactInputClass} w-48 font-mono`}
-                    value={r.value}
-                    onChange={(e) => setRule(i, { value: e.target.value })}
-                    placeholder={OPS.find((o) => o.op === r.op)?.hint ?? "value"}
-                    aria-label="Filter value"
-                  />
-                )}
-                <button type="button" onClick={() => set({ rules: rules.filter((_, j) => j !== i) })} className="px-1 text-muted hover:text-critical" aria-label="Remove filter">
-                  ×
-                </button>
-              </div>
-            ))}
+            <RuleRows columns={dataset.columns} rules={rules} onChange={(next) => set({ rules: next })} />
             <button type="button" onClick={addRule} className="text-xs text-accent hover:underline">
               + Add filter
             </button>
@@ -173,5 +143,44 @@ export function RecordFilter({ dataset, value, onChange }: { dataset: Dataset; v
         </div>
       )}
     </div>
+  );
+}
+
+/** Editable filter rules: field, operator, value. */
+export function RuleRows({ columns, rules, onChange }: { columns: string[]; rules: FilterRule[]; onChange: (rules: FilterRule[]) => void }) {
+  const setRule = (i: number, patch: Partial<FilterRule>) => onChange(rules.map((r, j) => (j === i ? { ...r, ...patch } : r)));
+  return (
+    <>
+      {rules.map((r, i) => (
+        <div key={i} className="flex flex-wrap items-center gap-2">
+          <select className={compactInputClass} value={r.field} onChange={(e) => setRule(i, { field: e.target.value })} aria-label="Filter field">
+            {columns.map((c) => (
+              <option key={c} value={c}>
+                {c}
+              </option>
+            ))}
+          </select>
+          <select className={compactInputClass} value={r.op} onChange={(e) => setRule(i, { op: e.target.value as FilterRule["op"] })} aria-label="Filter operator">
+            {OPS.map((o) => (
+              <option key={o.op} value={o.op}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+          {!NO_VALUE.includes(r.op) && (
+            <input
+              className={`${compactInputClass} w-48 font-mono`}
+              value={r.value}
+              onChange={(e) => setRule(i, { value: e.target.value })}
+              placeholder={OPS.find((o) => o.op === r.op)?.hint ?? "value"}
+              aria-label="Filter value"
+            />
+          )}
+          <button type="button" onClick={() => onChange(rules.filter((_, j) => j !== i))} className="px-1 text-muted hover:text-critical" aria-label="Remove filter">
+            ×
+          </button>
+        </div>
+      ))}
+    </>
   );
 }

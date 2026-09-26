@@ -15,7 +15,7 @@ from fastapi import HTTPException
 from pydantic import BaseModel, Field
 
 from . import datasets as ds_lib
-from . import db, runner, scoring, templates
+from . import db, linked, runner, scoring, templates
 from . import selection as sel
 
 MAX_INPUTS = 10_000
@@ -280,6 +280,10 @@ async def create_run(
     org_id: int, user_id: int, cfg: RunConfig, *, name: str | None = None, output: str | None = None,
     profile_id: int | None = None, profile_version: int | None = None, label: str | None = None,
 ) -> int:
+    await linked.refresh_for_run(org_id, {
+        *(r.dataset_id for r in cfg.datasets), *(r.expected_dataset_id for r in cfg.datasets if r.expected_dataset_id),
+        *(b.dataset_id for b in cfg.bindings.values() if b.type == "dataset" and b.dataset_id),
+    })
     prepared = await prepare(org_id, cfg)
     async with db.pool().acquire() as conn, conn.transaction():
         run_id = await conn.fetchval(

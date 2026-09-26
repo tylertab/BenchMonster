@@ -1,5 +1,6 @@
 name: benchmonster-dev
-# Local dev database (TimescaleDB), so development never touches production.
+# Local dev database (TimescaleDB), so development never touches production,
+# plus SeaweedFS as a stand-in for S3-compatible object storage (Vultr Object Storage).
 #   docker compose -f deploy/docker-compose.dev.yml up -d
 # then point .env.local at it (see backend/README.md).
 services:
@@ -15,5 +16,19 @@ services:
       - devdb:/var/lib/postgresql/data
     restart: unless-stopped
 
+  # S3-compatible storage for testing connections: http://localhost:8333.
+  # Users (dev-s3.json): devaccess / devsecret123 (read + write),
+  # devreader / devreader123 (read only).
+  s3:
+    image: chrislusf/seaweedfs:latest
+    command: server -dir=/data -s3 -s3.port=8333 -s3.config=/etc/dev-s3.json -master.volumeSizeLimitMB=64
+    ports:
+      - "8333:8333"
+    volumes:
+      - ./dev-s3.json:/etc/dev-s3.json:ro
+      - devs3:/data
+    restart: unless-stopped
+
 volumes:
   devdb:
+  devs3:

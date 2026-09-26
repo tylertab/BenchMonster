@@ -49,6 +49,61 @@ export type Dataset = {
   schema: JsonSchema | null;
   run_count: number;
   expected_run_count: number;
+  source: DatasetSource | null;
+  connection_name: string | null;
+};
+
+/** Where an imported dataset came from (null = uploaded). */
+export type DatasetSource = {
+  connection_id: number;
+  path?: string;
+  table?: string;
+  query?: string;
+  rules?: FilterRule[];
+  match?: "all" | "any";
+  etag?: string | null;
+  synced_at?: string;
+  auto_refresh?: boolean;
+};
+
+export type ConnectionKind = "s3" | "postgres";
+export type ConnectionProvider = "vultr" | "tiger" | "aws" | "other";
+/** Result of an access check. write: null = not tested because the connection is read-only. */
+export type ConnectionAccess = { read: boolean; write: boolean | null; detail: string; checked_at: string };
+export type S3Config = { endpoint: string; region: string; bucket: string; prefix: string };
+export type PgConfig = { host: string; port: number; database: string; user: string; sslmode: "require" | "verify-full" | "prefer" | "disable"; schema: string };
+export type Connection = {
+  id: number;
+  name: string;
+  kind: ConnectionKind;
+  provider: ConnectionProvider;
+  config: S3Config | PgConfig;
+  allow_write: boolean;
+  access: ConnectionAccess | null;
+  created_at: string;
+  updated_at: string;
+  created_by: string | null;
+  dataset_count: number;
+};
+export type ConnectionIn = {
+  name: string;
+  kind: ConnectionKind;
+  provider: ConnectionProvider;
+  config: S3Config | PgConfig;
+  secret: Record<string, string> | null;
+  allow_write: boolean;
+};
+export type BrowseResult = { folder: string; folders: string[]; files: { path: string; size: number; modified: string }[]; truncated: boolean };
+export type PgTable = { schema: string; name: string; type: string; columns: string[]; approx_rows: number };
+export type ImportIn = {
+  path?: string;
+  table?: string;
+  query?: string;
+  rules?: FilterRule[];
+  match?: "all" | "any";
+  name?: string;
+  description?: string;
+  auto_refresh?: boolean;
 };
 
 export type FilterOp = "eq" | "neq" | "in" | "not_in" | "contains" | "not_contains" | "gt" | "gte" | "lt" | "lte" | "empty" | "not_empty" | "regex";
@@ -447,7 +502,17 @@ export const api = {
     if (name) form.append("name", name);
     return request<DatasetDetail>("/datasets", { method: "POST", body: form });
   },
-  updateDataset: (id: number, body: { name: string; description?: string | null; schema?: JsonSchema }) => patch<DatasetDetail>(`/datasets/${id}`, body),
+  updateDataset: (id: number, body: { name: string; description?: string | null; schema?: JsonSchema; auto_refresh?: boolean }) => patch<DatasetDetail>(`/datasets/${id}`, body),
+  connections: () => request<Connection[]>("/connections"),
+  testConnection: (body: ConnectionIn) => post<ConnectionAccess>("/connections/test", body),
+  createConnection: (body: ConnectionIn) => post<Connection>("/connections", body),
+  updateConnection: (id: number, body: ConnectionIn) => put<Connection>(`/connections/${id}`, body),
+  recheckConnection: (id: number) => post<Connection>(`/connections/${id}/check`, {}),
+  deleteConnection: (id: number) => del<{ ok: boolean }>(`/connections/${id}`),
+  browseConnection: (id: number, folder = "") => request<BrowseResult>(`/connections/${id}/browse?folder=${encodeURIComponent(folder)}`),
+  connectionTables: (id: number) => request<PgTable[]>(`/connections/${id}/tables`),
+  importFromConnection: (id: number, body: ImportIn) => post<{ id: number }>(`/connections/${id}/import`, body),
+  refreshDataset: (id: number) => post<{ changed: boolean; row_count?: number; dataset: DatasetDetail }>(`/datasets/${id}/refresh`, {}),
   previewSelection: (id: number, selection: RecordSelection) => post<SelectionPreview>(`/datasets/${id}/select`, selection),
   validateDataset: (id: number, schema?: JsonSchema) => post<ValidationReport>(`/datasets/${id}/validate`, { schema }),
   inferSchema: (id: number) => request<JsonSchema>(`/datasets/${id}/infer-schema`),

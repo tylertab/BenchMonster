@@ -77,6 +77,9 @@ export function Header() {
             <Link href="/datasets" className="text-sm text-ink-2 hover:text-ink">
               Datasets
             </Link>
+            <Link href="/connections" className="text-sm text-ink-2 hover:text-ink">
+              Connections
+            </Link>
             <Link href="/models" className="text-sm text-ink-2 hover:text-ink">
               Models
             </Link>

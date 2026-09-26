@@ -43,6 +43,12 @@ export default function DatasetsPage() {
         <h1 className="text-2xl font-semibold tracking-tight">Datasets</h1>
         <p className="mt-1 text-sm text-ink-2">Input sets and expected-output sets for your benchmark profiles. Each file keeps its type, a description, and a row schema.</p>
       </div>
+      <p className="text-sm text-ink-2">
+        Data in cloud storage or a database?{" "}
+        <Link href="/connections" className="text-accent hover:underline">
+          Import it from a connection →
+        </Link>
+      </p>
       <label
         className="flex cursor-pointer flex-col items-center gap-1 rounded-lg border border-dashed border-line bg-surface px-4 py-8 text-center text-sm hover:bg-surface-2"
         onDragOver={(e) => e.preventDefault()}
@@ -87,6 +93,12 @@ export default function DatasetsPage() {
                       </Link>
                     </div>
                     {d.name !== d.filename.replace(/\.[^.]+$/, "") && <div className="text-xs text-ink-2">{d.name}</div>}
+                    {d.source && (
+                      <div className="text-xs text-accent">
+                        ⇄ from {d.connection_name ?? "a deleted connection"}
+                        {d.source.auto_refresh && <span className="text-muted"> · refreshes before runs</span>}
+                      </div>
+                    )}
                     {d.description && <div className="line-clamp-2 max-w-md text-xs text-muted">{d.description}</div>}
                   </td>
                   <td className="py-2.5 pr-3">

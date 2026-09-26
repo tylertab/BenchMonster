@@ -32,6 +32,32 @@ export default function DatasetPage() {
     api.runs({ dataset_id: Number(id), limit: 20 }).then((r) => setRuns(r.items));
   }, [id]);
 
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshNote, setRefreshNote] = useState<string | null>(null);
+  const refresh = async () => {
+    if (!ds) return;
+    setRefreshing(true);
+    setError(null);
+    try {
+      const r = await api.refreshDataset(ds.id);
+      setDs(r.changed ? await api.dataset(ds.id, 100) : { ...ds, source: r.dataset.source });
+      setRefreshNote(r.changed ? `Updated: ${r.dataset.row_count.toLocaleString()} records. Past runs keep the data they used.` : "Already up to date.");
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setRefreshing(false);
+    }
+  };
+  const setAutoRefresh = async (on: boolean) => {
+    if (!ds) return;
+    try {
+      const d = await api.updateDataset(ds.id, { name: ds.name, description: ds.description, auto_refresh: on });
+      setDs({ ...ds, source: d.source });
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+
   const remove = async () => {
     if (!ds || !window.confirm(`Delete ${ds.filename}? Past runs keep their inputs and results.`)) return;
     await api.deleteDataset(ds.id);
@@ -57,7 +83,7 @@ export default function DatasetPage() {
   return (
     <div className="space-y-6">
       <div className="flex items-end gap-3">
-        <div>
+        <div className="min-w-0 flex-1">
           <Link href="/datasets" className="text-sm text-ink-2 hover:text-ink">
             ← Datasets
           </Link>
@@ -66,10 +92,35 @@ export default function DatasetPage() {
             {ds.filename}
           </h1>
           <p className="mt-1 text-sm text-ink-2">
-            {ds.row_count.toLocaleString()} records · {ds.columns.length} fields · uploaded {when(ds.created_at)}
+            {ds.row_count.toLocaleString()} records · {ds.columns.length} fields · {ds.source ? "imported" : "uploaded"} {when(ds.created_at)}
             {ds.created_by && ` by ${ds.created_by}`} · used as input in {ds.run_count} run{ds.run_count === 1 ? "" : "s"}, as expected outputs in{" "}
             {ds.expected_run_count}
           </p>
+          {ds.source && (
+            <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md bg-accent/5 px-3 py-2 text-sm">
+              <span>
+                ⇄ Imported from{" "}
+                {ds.connection_name ? (
+                  <Link href={`/connections/${ds.source.connection_id}`} className="font-medium text-accent hover:underline">
+                    {ds.connection_name}
+                  </Link>
+                ) : (
+                  <span className="text-muted">a deleted connection</span>
+                )}{" "}
+                <span className="font-mono text-xs text-ink-2">{ds.source.path ?? ds.source.table ?? "SQL query"}</span>
+                {ds.source.rules?.length ? <span className="text-xs text-ink-2"> · {ds.source.rules.length} filter{ds.source.rules.length === 1 ? "" : "s"}</span> : null}
+              </span>
+              <span className="text-xs text-muted">synced {ds.source.synced_at ? when(ds.source.synced_at) : "–"}</span>
+              <label className="flex items-center gap-1.5 text-xs text-ink-2">
+                <input type="checkbox" checked={!!ds.source.auto_refresh} onChange={(e) => setAutoRefresh(e.target.checked)} disabled={!ds.connection_name} />
+                refresh before every run
+              </label>
+              <Button variant="secondary" className="ml-auto" onClick={refresh} disabled={refreshing || !ds.connection_name}>
+                {refreshing ? "Refreshing…" : "Refresh now"}
+              </Button>
+              {refreshNote && <span className="w-full text-xs text-ink-2">{refreshNote}</span>}
+            </div>
+          )}
         </div>
         <div className="ml-auto flex gap-2">
           <Button variant="ghost" onClick={remove}>

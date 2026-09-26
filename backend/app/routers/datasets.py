@@ -2,12 +2,13 @@ import jsonschema
 from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
-from .. import auth, datasets, db, selection
+from .. import auth, dataset_store, datasets, db, linked, selection
 
 router = APIRouter(prefix="/api/datasets", tags=["datasets"])
 
 COLUMNS = """d.id, d.name, d.filename, d.format, d.columns, d.row_count, d.created_at, d.description,
-    d.schema, u.name as created_by,
+    d.schema, d.source, u.name as created_by,
+    (select c.name from connections c where c.id = (d.source->>'connection_id')::int) as connection_name,
     (select count(distinct run_id) from run_datasets rd where rd.dataset_id = d.id) as run_count,
     (select count(distinct run_id) from run_datasets rd where rd.expected_dataset_id = d.id) as expected_run_count"""
 
@@ -21,24 +22,11 @@ async def upload(file: UploadFile, name: str | None = Form(None), description: s
         rows = datasets.parse(filename, await file.read())
     except (datasets.DatasetError, ValueError) as e:
         raise HTTPException(400, str(e))
-    # Columns = union of keys in first-seen order (JSON rows may differ).
-    columns: dict[str, None] = {}
-    for r in rows:
-        for k in r:
-            columns.setdefault(k)
     fmt = filename.rsplit(".", 1)[-1].lower()
-    async with db.pool().acquire() as conn, conn.transaction():
-        dataset_id = await conn.fetchval(
-            """insert into datasets (org_id, name, filename, format, columns, row_count, description, schema, created_by)
-               values ($1, $2, $3, $4, $5, $6, $7, $8, $9) returning id""",
-            ctx.org_id, (name or "").strip() or filename.rsplit(".", 1)[0], filename,
-            "jsonl" if fmt == "ndjson" else fmt, list(columns), len(rows), (description or "").strip() or None,
-            datasets.infer_schema(rows, list(columns)), ctx.user_id,
-        )
-        await conn.executemany(
-            "insert into dataset_rows (dataset_id, idx, data) values ($1, $2, $3)",
-            [(dataset_id, i, r) for i, r in enumerate(rows)],
-        )
+    dataset_id = await dataset_store.create(
+        ctx.org_id, ctx.user_id, name=(name or "").strip() or filename.rsplit(".", 1)[0], filename=filename,
+        fmt="jsonl" if fmt == "ndjson" else fmt, rows=rows, description=description,
+    )
     return await get_dataset(dataset_id, ctx=ctx)
 
 
@@ -82,6 +70,7 @@ class DatasetMetaIn(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     description: str | None = Field(None, max_length=5000)
     schema_: dict | None = Field(None, alias="schema")
+    auto_refresh: bool | None = None  # imported datasets: re-read the source before every run
 
 
 def _check_schema(schema: dict) -> None:
@@ -103,7 +92,19 @@ async def update_dataset(dataset_id: int, body: DatasetMetaIn, ctx: auth.Ctx = D
     )
     if status == "UPDATE 0":
         raise HTTPException(404, "dataset not found")
+    if body.auto_refresh is not None:
+        await db.pool().execute(
+            "update datasets set source = source || jsonb_build_object('auto_refresh', $2::boolean) where id = $1 and source is not null",
+            dataset_id, body.auto_refresh,
+        )
     return await get_dataset(dataset_id, ctx=ctx)
+
+
+@router.post("/{dataset_id}/refresh")
+async def refresh(dataset_id: int, ctx: auth.Ctx = Depends(auth.current_ctx)):
+    """Re-read an imported dataset from its connection."""
+    result = await linked.refresh(ctx.org_id, dataset_id)
+    return {**result, "dataset": await get_dataset(dataset_id, ctx=ctx)}
 
 
 class ValidateIn(BaseModel):

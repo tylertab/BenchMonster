@@ -35,5 +35,10 @@ class Settings(BaseSettings):
     # Base URL used in invitation links.
     public_url: str = "http://localhost:3000"
 
+    # Fernet key that encrypts saved connection credentials.
+    connection_secret_key: str = ""
+    # Let connections reach private / loopback addresses (dev only: local S3, local Postgres).
+    allow_private_connections: bool = False
+
 
 settings = Settings()
