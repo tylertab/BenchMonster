@@ -20,7 +20,9 @@ class Settings(BaseSettings):
     backboard_assistant_id: str = ""
 
     elevenlabs_api_key: str = ""
-    elevenlabs_agent_id: str = ""
+    elevenlabs_voice_id: str = ""  # blank = voice.DEFAULT_VOICE
+    elevenlabs_tts_model: str = "eleven_flash_v2_5"
+    elevenlabs_stt_model: str = "scribe_v1"
 
     # Model the review assistant runs on (a Vultr model id).
     assistant_model: str = "glm-5.3"

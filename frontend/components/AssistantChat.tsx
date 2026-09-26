@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { api, type ChatMessage, type ToolCall } from "@/lib/api";
+import { useVoice } from "@/lib/useVoice";
 import { ResultTable } from "./SqlConsole";
 import { Button, Card } from "./ui";
 
@@ -79,6 +80,8 @@ export function AssistantChat({
 }) {
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
+  const [speakReplies, setSpeakReplies] = useState(false);
+  const voice = useVoice();
   const bottom = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -98,6 +101,7 @@ export function AssistantChat({
     try {
       const r = await api.chat(runId, text);
       setMessages((m) => [...m, { id: r.id, role: "assistant", content: r.reply, tool_calls: r.tool_calls }]);
+      if (speakReplies) voice.speak(r.reply);
     } catch (e) {
       setMessages((m) => [...m, { id: tempId - 1, role: "assistant", content: `⚠️ ${(e as Error).message}`, tool_calls: null }]);
     } finally {
@@ -105,8 +109,45 @@ export function AssistantChat({
     }
   };
 
+  // Push-to-talk: click to record, click again to send. Voice replies are always spoken.
+  const toggleMic = async () => {
+    if (voice.state === "speaking") return voice.stopSpeaking();
+    if (voice.state !== "recording") return voice.start();
+    const clip = await voice.stop();
+    if (!clip) return voice.setState("idle");
+    setBusy(true);
+    try {
+      const r = await api.voiceTurn(runId, clip);
+      setMessages((m) => [
+        ...m,
+        { id: -Date.now(), role: "user", content: `🎙️ ${r.transcript}`, tool_calls: null },
+        { id: r.id, role: "assistant", content: r.reply, tool_calls: r.tool_calls },
+      ]);
+      voice.speak(r.reply);
+    } catch (e) {
+      voice.setError((e as Error).message);
+      voice.setState("idle");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const micLabel = { idle: "Talk", recording: "Stop & send", thinking: "Thinking…", speaking: "Stop speaking" }[voice.state];
+
   return (
-    <Card title="AI analyst" actions={headerActions} className="flex min-w-0 flex-col">
+    <Card
+      title="AI analyst"
+      actions={
+        <>
+          {headerActions}
+          <label className="flex items-center gap-1.5 text-xs text-ink-2">
+            <input type="checkbox" checked={speakReplies} onChange={(e) => setSpeakReplies(e.target.checked)} />
+            Speak replies
+          </label>
+        </>
+      }
+      className="flex min-w-0 flex-col"
+    >
       <div className="flex h-[560px] flex-col">
         <div className="flex-1 space-y-4 overflow-y-auto pr-1">
           {messages.length === 0 && (
@@ -136,6 +177,7 @@ export function AssistantChat({
             ),
           )}
           {busy && <p className="animate-pulse text-sm text-muted">Analyzing…</p>}
+          {voice.error && <p className="text-sm text-critical">⚠️ {voice.error}</p>}
           <div ref={bottom} />
         </div>
         <form
@@ -153,6 +195,17 @@ export function AssistantChat({
           />
           <Button type="submit" disabled={busy || !input.trim()}>
             Send
+          </Button>
+          <Button
+            type="button"
+            variant={voice.state === "recording" ? "primary" : "secondary"}
+            onClick={toggleMic}
+            disabled={voice.state === "thinking" || (busy && voice.state !== "speaking")}
+            aria-label={micLabel}
+            className={voice.state === "recording" ? "animate-pulse !bg-critical" : ""}
+          >
+            <span aria-hidden>{voice.state === "speaking" ? "🔊" : "🎙️"}</span>
+            {micLabel}
           </Button>
         </form>
       </div>

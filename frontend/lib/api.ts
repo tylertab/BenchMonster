@@ -195,4 +195,20 @@ export const api = {
   chatHistory: (runId: number | string) => request<ChatMessage[]>(`/runs/${runId}/chat`),
   chat: (runId: number | string, message: string) =>
     post<{ id: number; reply: string; tool_calls: ToolCall[] }>(`/runs/${runId}/chat`, { message }),
+
+  voiceTurn: (runId: number | string, audio: Blob) => {
+    const form = new FormData();
+    const ext = audio.type.includes("mp4") ? "m4a" : audio.type.includes("ogg") ? "ogg" : "webm";
+    form.append("audio", audio, `clip.${ext}`);
+    return request<{ transcript: string; id: number; reply: string; tool_calls: ToolCall[] }>(`/runs/${runId}/voice`, {
+      method: "POST",
+      body: form,
+    });
+  },
+  /** MP3 for the given text, as an object URL (caller revokes). */
+  tts: async (text: string) => {
+    const res = await fetch("/api/tts", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text }) });
+    if (!res.ok) throw new ApiError(`text-to-speech failed (${res.status})`);
+    return URL.createObjectURL(await res.blob());
+  },
 };
