@@ -419,9 +419,14 @@ export function ProfileEditor({
 
             {perRecord ? (
               <div className="space-y-2">
-                <h3 className="text-sm font-medium">
-                  Record sources <span className="font-normal text-muted">· one prompt per record, for {recordVars.map((v) => `{{${v}}}`).join(", ")}</span>
-                </h3>
+                <div>
+                  <h3 className="text-sm font-medium">Record sources</h3>
+                  <p className="text-xs text-ink-2">
+                    Files whose rows are looped over: <strong>each record becomes one prompt</strong>, and{" "}
+                    {recordVars.map((v) => `{{${v}}}`).join(", ")} {recordVars.length === 1 ? "is" : "are"} read from the current record. Add several files to
+                    run them all in one benchmark (e.g. US and EU orders); their column names can differ, so each file says which column feeds each variable.
+                  </p>
+                </div>
                 {missing > 0 && (
                   <p className="rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-sm">
                     {missing} record source{missing === 1 ? " uses" : "s use"} a deleted dataset and {missing === 1 ? "is" : "are"} left out.

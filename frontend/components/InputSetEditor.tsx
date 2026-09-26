@@ -94,77 +94,108 @@ export function DatasetPicker({ datasets, onPick, onUploaded, onCancel, title }:
   );
 }
 
-/** A record source: each row becomes one prompt; shows which variable each column feeds. */
+/** A record source: each row becomes one prompt. Shows what each record variable reads from this file. */
 export function InputFileCard({ set, variables, wholeRecordVars = [], onChange, onRemove }: {
   set: InputSet;
-  variables: string[]; // variables read from a column of each record
+  variables: string[]; // variables read from one column of each record
   wholeRecordVars?: string[]; // variables that receive the whole record as JSON
   onChange: (s: InputSet) => void;
   onRemove: () => void;
 }) {
-  const feeds = (col: string) => variables.filter((v) => set.mapping[v] === col);
-  const leaks = wholeRecordVars.length > 0 && set.expectedSource === "column" && set.expectedColumn;
   const props = set.input.schema?.properties ?? {};
+  const cols = set.input.columns;
+  const leaks = wholeRecordVars.length > 0 && set.expectedSource === "column" && set.expectedColumn;
+  const usedBy = (col: string) => [
+    ...variables.filter((v) => set.mapping[v] === col),
+    ...wholeRecordVars,
+  ];
+
   return (
     <div className="rounded-md border border-line p-3">
-      <div className="flex items-center gap-2 text-sm">
+      <div className="flex flex-wrap items-center gap-2 text-sm">
         <FormatBadge format={set.input.format} />
         <span className="font-mono font-medium">{set.input.filename}</span>
-        <span className="text-xs text-muted">{set.input.row_count.toLocaleString()} rows → {set.input.row_count.toLocaleString()} prompts</span>
+        <span className="text-xs text-ink-2">
+          {set.input.row_count.toLocaleString()} record{set.input.row_count === 1 ? "" : "s"} → {set.input.row_count.toLocaleString()} prompt
+          {set.input.row_count === 1 ? "" : "s"}
+        </span>
         <button type="button" className="ml-auto text-xs text-muted hover:text-critical" onClick={onRemove}>
           Remove
         </button>
       </div>
-      {set.input.description && <p className="mt-0.5 text-xs text-ink-2">{set.input.description}</p>}
+      {set.input.description && <p className="mt-0.5 text-xs text-muted">{set.input.description}</p>}
 
-      {wholeRecordVars.length > 0 && (
-        <p className="mt-2 text-xs text-ink-2">
-          {wholeRecordVars.map((v) => `{{${v}}}`).join(", ")} ← the whole record as JSON
-        </p>
-      )}
+      <table className="mt-2 w-full text-sm">
+        <thead className="text-left text-xs text-muted">
+          <tr>
+            <th className="w-40 pb-1 font-medium">Variable</th>
+            <th className="pb-1 font-medium">Value from each record of this file</th>
+          </tr>
+        </thead>
+        <tbody>
+          {wholeRecordVars.map((v) => (
+            <tr key={v} className="border-t border-line">
+              <td className="py-1.5">
+                <code className="text-accent">{`{{${v}}}`}</code>
+              </td>
+              <td className="py-1.5 text-ink-2">
+                the whole record: all {cols.length} columns as a JSON object
+              </td>
+            </tr>
+          ))}
+          {variables.map((v) => (
+            <tr key={v} className="border-t border-line">
+              <td className="py-1.5">
+                <code className="text-accent">{`{{${v}}}`}</code>
+              </td>
+              <td className="py-1">
+                <span className="mr-2 text-xs text-ink-2">column</span>
+                <select
+                  className={`${compactInputClass} ${set.mapping[v] ? "" : "border-critical"}`}
+                  value={set.mapping[v] ?? ""}
+                  onChange={(e) => onChange({ ...set, mapping: { ...set.mapping, [v]: e.target.value } })}
+                  aria-label={`Column for ${v} in ${set.input.filename}`}
+                >
+                  <option value="">choose column…</option>
+                  {cols.map((c) => (
+                    <option key={c} value={c}>
+                      {c}
+                      {props[c]?.type ? ` (${props[c].type})` : ""}
+                    </option>
+                  ))}
+                </select>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+
       {leaks && (
-        <p className="mt-1 text-xs text-critical">
+        <p className="mt-2 text-xs text-critical">
           The whole record includes the expected column <code>{set.expectedColumn}</code>, so the answer would be in the prompt. Put expected outputs in a separate file, or use record fields instead.
         </p>
       )}
-      {variables.length === 0 ? null : (
-        <div className="mt-2 grid gap-2 sm:grid-cols-2">
-          {variables.map((v) => (
-            <label key={v} className="flex items-center gap-2 text-sm">
-              <code className="w-32 shrink-0 truncate text-xs text-accent">{`{{${v}}}`}</code>
-              <span className="text-muted">←</span>
-              <select
-                className={`${compactInputClass} min-w-0 flex-1 ${set.mapping[v] ? "" : "border-critical"}`}
-                value={set.mapping[v] ?? ""}
-                onChange={(e) => onChange({ ...set, mapping: { ...set.mapping, [v]: e.target.value } })}
-                aria-label={`Column for ${v} in ${set.input.filename}`}
-              >
-                <option value="">choose column…</option>
-                {set.input.columns.map((c) => (
-                  <option key={c}>{c}</option>
-                ))}
-              </select>
-            </label>
-          ))}
-        </div>
-      )}
 
-      <div className="mt-2 flex flex-wrap gap-1">
-        {set.input.columns.map((c) => {
-          const f = feeds(c);
-          return (
-            <span
-              key={c}
-              title={props[c]?.description}
-              className={`rounded px-1.5 py-0.5 font-mono text-xs ${f.length ? "bg-accent/10 text-accent" : "bg-surface-2 text-muted"}`}
-            >
-              {c}
-              {props[c]?.type && <span className="ml-1 opacity-70">{props[c].type}</span>}
-              {f.length > 0 ? ` → ${f.map((v) => `{{${v}}}`).join(", ")}` : wholeRecordVars.length ? "" : variables.length ? " · not used" : ""}
-            </span>
-          );
-        })}
-      </div>
+      <details className="mt-2">
+        <summary className="cursor-pointer text-xs text-muted">Columns in this file ({cols.length})</summary>
+        <table className="mt-1 w-full text-xs">
+          <tbody>
+            {cols.map((c) => {
+              const used = usedBy(c);
+              return (
+                <tr key={c} className="border-t border-line">
+                  <td className="w-44 py-1 font-mono">{c}</td>
+                  <td className="w-20 py-1 text-muted">{props[c]?.type ?? ""}</td>
+                  <td className="py-1 text-ink-2">
+                    {used.length ? `→ ${used.map((v) => `{{${v}}}`).join(", ")}` : <span className="text-muted">not used</span>}
+                    {props[c]?.description && <span className="ml-2 text-muted">· {props[c].description}</span>}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </details>
     </div>
   );
 }
