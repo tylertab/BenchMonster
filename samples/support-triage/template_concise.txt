@@ -1,0 +1,13 @@
+Triage this Nimbus support ticket. Reply with ONLY a JSON object.
+
+Ticket (tier: {{customer_tier}})
+Subject: {{subject}}
+Body: {{body}}
+
+category (the primary issue): billing (charges, refunds, invoices, plans, cancellations) | bug (broken, errors, outages) | feature_request (missing capability) | account (login, password, 2FA, SSO, seats, email, deletion; login/SSO problems are account even if broken) | how_to (using existing features)
+priority (first match wins): urgent = whole-team outage or security incident (compromise, data exposed) > high = data loss, enterprise bug/billing, or a charge wrong by >$100 > medium = pro bug/billing, or locked out > low
+requires_human: true if urgent/high, refund requested, or asks to cancel or talk to a person
+sentiment: positive = explicit praise/thanks; negative = frustration, complaints, distress, sarcasm (beats praise); otherwise neutral
+summary: one sentence, <= 20 words
+
+{"category": ..., "priority": ..., "requires_human": ..., "sentiment": ..., "summary": ...}
