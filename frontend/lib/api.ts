@@ -51,6 +51,26 @@ export type Dataset = {
   expected_run_count: number;
 };
 
+export type FilterOp = "eq" | "neq" | "in" | "not_in" | "contains" | "not_contains" | "gt" | "gte" | "lt" | "lte" | "empty" | "not_empty" | "regex";
+export type FilterRule = { field: string; op: FilterOp; value: string };
+/** Which records of a record source a run uses. Empty = all of them. */
+export type RecordSelection = {
+  rules?: FilterRule[];
+  match?: "all" | "any";
+  dedupe_on?: string | null;
+  pick?: "all" | "first" | "random";
+  n?: number | null;
+  seed?: number;
+};
+export type SelectionPreview = {
+  total: number;
+  matched: number;
+  unique: number;
+  selected: number;
+  description: string;
+  rows: ({ idx: number } & Record<string, string>)[];
+};
+
 export type ValidationReport = { checked: number; invalid: number; errors: { row: number; field: string; message: string }[] };
 
 export type DatasetDetail = Dataset & { rows: ({ idx: number } & Record<string, string>)[] };
@@ -124,6 +144,7 @@ export type RunDataset = {
   expected_filename: string | null;
   input_key: string | null;
   expected_key: string | null;
+  selection: RecordSelection;
   rows: number;
 };
 
@@ -164,6 +185,7 @@ export type DatasetRef = {
   expected_dataset_id: number | null;
   input_key: string | null;
   expected_key: string | null;
+  selection?: RecordSelection;
 };
 
 /** A prompt variable that doesn't vary per record. */
@@ -264,6 +286,7 @@ export function versionToConfig(v: ProfileVersion): ProfileConfig {
         expected_dataset_id: d.expected_dataset_id,
         input_key: d.input_key,
         expected_key: d.expected_key,
+        selection: d.selection,
       })),
     scoring_method: v.scoring_method,
     scoring_config: v.scoring_config,
@@ -425,6 +448,7 @@ export const api = {
     return request<DatasetDetail>("/datasets", { method: "POST", body: form });
   },
   updateDataset: (id: number, body: { name: string; description?: string | null; schema?: JsonSchema }) => patch<DatasetDetail>(`/datasets/${id}`, body),
+  previewSelection: (id: number, selection: RecordSelection) => post<SelectionPreview>(`/datasets/${id}/select`, selection),
   validateDataset: (id: number, schema?: JsonSchema) => post<ValidationReport>(`/datasets/${id}/validate`, { schema }),
   inferSchema: (id: number) => request<JsonSchema>(`/datasets/${id}/infer-schema`),
   deleteDataset: (id: number) => del<{ ok: boolean }>(`/datasets/${id}`),

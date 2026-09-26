@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import type { ProfileVersion } from "@/lib/api";
+import { describeSelection } from "@/lib/selection";
 import { FormatBadge } from "./InputSetEditor";
 import { METHODS } from "./ScoringConfig";
 import { TemplateView, VariableChips } from "./TemplateView";
@@ -93,6 +94,7 @@ export function ProfileConfigView({ v }: { v: ProfileVersion }) {
                     <FormatBadge format={d.format} />
                     <DatasetLink id={d.dataset_id} available={d.available} filename={d.filename} />
                     {d.row_count != null && <span className="tabular text-xs text-muted">{d.row_count.toLocaleString()} rows</span>}
+                    {describeSelection(d.selection) && <span className="text-xs text-ink-2">· using records {describeSelection(d.selection)}</span>}
                   </li>
                 ))}
               </ul>

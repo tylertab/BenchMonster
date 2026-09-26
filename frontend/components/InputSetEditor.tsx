@@ -1,7 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { api, type Dataset } from "@/lib/api";
+import { api, type Dataset, type RecordSelection } from "@/lib/api";
+import { cleanSelection } from "@/lib/selection";
 import { Button, compactInputClass, Empty, inputClass } from "./ui";
 
 export type ExpectedSource = "none" | "column" | "dataset";
@@ -18,6 +19,7 @@ export type InputSet = {
   inputKey: string;
   expectedKey: string;
   expectedValue: "row" | "column";
+  selection: RecordSelection;
 };
 
 const EXPECTED_GUESSES = ["expected", "expected_output", "answer", "output", "target", "label", "gold", "reference"];
@@ -238,6 +240,7 @@ export function toRef(s: InputSet, mapping: Record<string, string>) {
     expected_dataset_id: fromDataset ? s.expectedDataset!.id : null,
     input_key: fromDataset && s.matchBy === "key" ? s.inputKey || null : null,
     expected_key: fromDataset && s.matchBy === "key" ? s.expectedKey || null : null,
+    selection: cleanSelection(s.selection),
   };
 }
 

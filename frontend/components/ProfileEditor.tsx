@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { ExpectedOutputCard, guessExpected, type InputSet, inputSetProblems, toRef } from "@/components/InputSetEditor";
 import { DEFAULT_PARAMS, ModelPicker } from "@/components/ModelPicker";
 import { buildScoringConfig, DEFAULT_SCORING, METHODS, OutputProcessing, ScoringConfig, scoringStateFrom, type ScoringState } from "@/components/ScoringConfig";
+import { RecordFilter } from "@/components/RecordFilter";
 import { VariableChips } from "@/components/TemplateView";
 import { Button, Card, compactInputClass, Empty, ErrorNote, Field, inputClass } from "@/components/ui";
 import {
@@ -19,6 +20,7 @@ import {
   type ScoringMethod,
   WHOLE_RECORD,
 } from "@/lib/api";
+import { isDefaultSelection } from "@/lib/selection";
 import { renderTemplate, templateVariables } from "@/lib/template";
 
 export type ProfileDraft = { name: string; description: string; config: ProfileConfig };
@@ -55,7 +57,7 @@ function newInputSet(d: Dataset): InputSet {
   const col = guessExpected(d.columns);
   return {
     key: newKey(), input: d, mapping: {}, expectedSource: col ? "column" : "none", expectedColumn: col,
-    expectedDataset: null, matchBy: "key", inputKey: "", expectedKey: "", expectedValue: "row",
+    expectedDataset: null, matchBy: "key", inputKey: "", expectedKey: "", expectedValue: "row", selection: {},
   };
 }
 
@@ -165,6 +167,7 @@ export function ProfileEditor({
               inputKey: r.input_key ?? "",
               expectedKey: r.expected_key ?? "",
               expectedValue: r.expected_dataset_id && r.expected_column ? "column" : "row",
+              selection: r.selection ?? {},
             })),
         );
       } else {
@@ -491,8 +494,17 @@ export function ProfileEditor({
               <div className="space-y-1 rounded-md bg-surface-2/60 px-3 py-2 text-sm text-ink-2">
                 {recordSet ? (
                   <p>
-                    Each of the <strong>{recordSet.input.row_count.toLocaleString()} records</strong> in <span className="font-mono">{recordSet.input.filename}</span> becomes one
-                    prompt; {recordVars.map((v) => `{{${v}}}`).join(", ")} {recordVars.length === 1 ? "is" : "are"} read from the current record.
+                    {isDefaultSelection(recordSet.selection) ? (
+                      <>
+                        Each of the <strong>{recordSet.input.row_count.toLocaleString()} records</strong> in
+                      </>
+                    ) : (
+                      <>
+                        Each <strong>selected record</strong> (see below) in
+                      </>
+                    )}{" "}
+                    <span className="font-mono">{recordSet.input.filename}</span> becomes one prompt; {recordVars.map((v) => `{{${v}}}`).join(", ")}{" "}
+                    {recordVars.length === 1 ? "is" : "are"} read from the current record.
                   </p>
                 ) : (
                   <p>Choose the file that {recordVars.map((v) => `{{${v}}}`).join(", ")} {recordVars.length === 1 ? "reads" : "read"} from; each of its records becomes one prompt.</p>
@@ -515,6 +527,10 @@ export function ProfileEditor({
               <p className="rounded-md bg-surface-2/60 px-3 py-2 text-sm text-ink-2">
                 No variable reads per-record data, so each run sends <strong>a single prompt</strong> per model.
               </p>
+            )}
+
+            {perRecord && recordSet && (
+              <RecordFilter key={recordSet.input.id} dataset={recordSet.input} value={recordSet.selection} onChange={(sel) => updateSet(recordSet.key, { ...recordSet, selection: sel })} />
             )}
 
             {previewValues && (

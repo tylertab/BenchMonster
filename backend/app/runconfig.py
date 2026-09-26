@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 
 from . import datasets as ds_lib
 from . import db, runner, scoring, templates
+from . import selection as sel
 
 MAX_INPUTS = 10_000
 MAX_INLINE_CHARS = 200_000  # a whole dataset / fixed text inlined into the prompt
@@ -46,6 +47,8 @@ class DatasetRef(BaseModel):
     expected_dataset_id: int | None = None
     input_key: str | None = None
     expected_key: str | None = None
+    # Which records to use (filters, dedupe, first/random N). Default: all of them.
+    selection: sel.Selection = sel.Selection()
 
 
 class RunConfig(BaseModel):
@@ -81,7 +84,7 @@ class Prepared(BaseModel):
     """A validated config: datasets resolved and every input rendered."""
 
     # (position, dataset_id, name, filename, mapping, expected_column,
-    #  expected_dataset_id, expected_filename, input_key, expected_key)
+    #  expected_dataset_id, expected_filename, input_key, expected_key, selection)
     datasets: list[tuple]
     inputs: list[tuple]  # (position, row_idx, variables, prompt, expected)
 
@@ -159,7 +162,7 @@ async def prepare(org_id: int, cfg: RunConfig, *, render: bool = True) -> Prepar
         if not render:
             return Prepared(datasets=[], inputs=[])
         return Prepared(
-            datasets=[(0, None, None, "(single prompt)", {}, None, None, None, None, None)],
+            datasets=[(0, None, None, "(single prompt)", {}, None, None, None, None, None, {})],
             inputs=[(0, 0, labels, templates.render(cfg.template, constants), (cfg.expected_text or "").strip() or None)],
         )
 
@@ -195,11 +198,13 @@ async def prepare(org_id: int, cfg: RunConfig, *, render: bool = True) -> Prepar
                 raise HTTPException(400, f"{exp['filename']}: no key column {ref.expected_key!r}")
         elif ref.expected_column and ref.expected_column not in cols:
             raise HTTPException(400, f"{ds['filename']}: no column {ref.expected_column!r}")
+        sel.validate(ref.selection, ds["columns"], ds["filename"])
         if cfg.scoring_method in NEEDS_EXPECTED and not (ref.expected_column or exp):
             raise HTTPException(400, f"{ds['filename']}: {cfg.scoring_method} scoring needs expected outputs")
         datasets.append((pos, ds["id"], ds["name"], ds["filename"], mapping, ref.expected_column,
                          exp["id"] if exp else None, exp["filename"] if exp else None,
-                         ref.input_key if exp else None, ref.expected_key if exp else None))
+                         ref.input_key if exp else None, ref.expected_key if exp else None,
+                         {} if ref.selection.is_default() else ref.selection.model_dump(exclude_defaults=True)))
         if not render:
             continue
         rows = await _rows(ds["id"])
@@ -207,8 +212,11 @@ async def prepare(org_id: int, cfg: RunConfig, *, render: bool = True) -> Prepar
         expected_for = _expected_lookup(ref, exp, await pool.fetch(
             "select idx, data from dataset_rows where dataset_id = $1 order by idx", exp["id"]
         ) if exp else None)
+        picked, stats = sel.apply(rows, ref.selection)
+        if not picked:
+            raise HTTPException(400, f"{ds['filename']}: the record filters match none of its {stats.total} records")
         unmatched = 0
-        for i, r in enumerate(rows):
+        for i, r in picked:
             values = {
                 v: json.dumps(ds_lib.typed_row(r["data"], schema, order=ds["columns"]), ensure_ascii=False) if c == RECORD else r["data"].get(c, "")
                 for v, c in mapping.items()
@@ -285,8 +293,8 @@ async def create_run(
         )
         await conn.executemany(
             """insert into run_datasets (run_id, position, dataset_id, dataset_name, filename, mapping, expected_column,
-                   expected_dataset_id, expected_filename, input_key, expected_key)
-               values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)""",
+                   expected_dataset_id, expected_filename, input_key, expected_key, selection)
+               values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)""",
             [(run_id, *d) for d in prepared.datasets],
         )
         await conn.executemany(

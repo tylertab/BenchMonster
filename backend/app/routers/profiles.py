@@ -41,7 +41,7 @@ async def _version(profile_id: int, version: int) -> dict:
         raise HTTPException(404, f"version {version} not found")
     datasets = await db.pool().fetch(
         """select d.position, d.dataset_id, d.dataset_name, d.filename, d.mapping, d.expected_column,
-                  d.expected_dataset_id, d.expected_filename, d.input_key, d.expected_key,
+                  d.expected_dataset_id, d.expected_filename, d.input_key, d.expected_key, d.selection,
                   ds.row_count, ds.columns, ds.format, (ds.id is not null) as available,
                   eds.row_count as expected_row_count, eds.columns as expected_columns, eds.format as expected_format,
                   (d.expected_dataset_id is null or eds.id is not null) as expected_available
@@ -68,7 +68,8 @@ def _as_config(v: dict) -> runconfig.RunConfig:
         datasets=[runconfig.DatasetRef(dataset_id=d["dataset_id"] or 0, mapping=d["mapping"],
                                        expected_column=d["expected_column"],
                                        expected_dataset_id=d["expected_dataset_id"], input_key=d["input_key"],
-                                       expected_key=d["expected_key"]) for d in v["datasets"]],
+                                       expected_key=d["expected_key"], selection=d["selection"] or {})
+                  for d in v["datasets"]],
         bindings=v["bindings"] or {}, expected_text=v["expected_text"],
         scoring_method=v["scoring_method"], scoring_config=v["scoring_config"], model_ids=v["model_ids"],
         **{k: v["params"][k] for k in ("max_tokens", "temperature", "concurrency", "mode", "batch_size") if k in v["params"]},
@@ -85,7 +86,8 @@ def _sections(cfg: runconfig.RunConfig) -> dict:
         # Unmapped variables default to same-named columns, so compare resolved mappings.
         "inputs": (
             [(d.dataset_id, sorted({v: d.mapping.get(v) or v for v in record_vars}.items()),
-              d.expected_column or None, d.expected_dataset_id, d.input_key or None, d.expected_key or None)
+              d.expected_column or None, d.expected_dataset_id, d.input_key or None, d.expected_key or None,
+              d.selection.model_dump(exclude_defaults=True))
              for d in cfg.datasets],
             sorted((k, json.dumps(b, sort_keys=True)) for k, b in bindings.items()),
         ),
@@ -115,8 +117,8 @@ async def _insert_version(conn, profile_id: int, cfg: runconfig.RunConfig, datas
     )
     await conn.executemany(
         """insert into profile_version_datasets (version_id, position, dataset_id, dataset_name, filename, mapping,
-               expected_column, expected_dataset_id, expected_filename, input_key, expected_key)
-           values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)""",
+               expected_column, expected_dataset_id, expected_filename, input_key, expected_key, selection)
+           values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)""",
         [(version_id, *d) for d in datasets],
     )
     await conn.execute(

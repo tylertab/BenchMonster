@@ -2,7 +2,7 @@ import jsonschema
 from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
-from .. import auth, datasets, db
+from .. import auth, datasets, db, selection
 
 router = APIRouter(prefix="/api/datasets", tags=["datasets"])
 
@@ -122,6 +122,21 @@ async def validate(dataset_id: int, body: ValidateIn, ctx: auth.Ctx = Depends(au
     schema = body.schema_ or ds["schema"] or datasets.infer_schema([d for _, d in rows], ds["columns"])
     _check_schema(schema)
     return datasets.validate_rows(rows, schema)
+
+
+@router.post("/{dataset_id}/select")
+async def preview_selection(dataset_id: int, body: selection.Selection, ctx: auth.Ctx = Depends(auth.current_ctx)):
+    """How many records a selection (filters, dedupe, first/random N) keeps, plus the first few."""
+    ds = await db.pool().fetchrow(
+        "select filename, columns from datasets where id = $1 and org_id = $2", dataset_id, ctx.org_id
+    )
+    if not ds:
+        raise HTTPException(404, "dataset not found")
+    selection.validate(body, ds["columns"], ds["filename"])
+    rows = await db.pool().fetch("select idx, data from dataset_rows where dataset_id = $1 order by idx", dataset_id)
+    picked, stats = selection.apply(rows, body)
+    return {**stats.model_dump(), "description": body.describe(),
+            "rows": [{"idx": r["idx"], **r["data"]} for _, r in picked[:5]]}
 
 
 @router.get("/{dataset_id}/infer-schema")

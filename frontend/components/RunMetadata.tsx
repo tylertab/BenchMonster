@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { api, type Run } from "@/lib/api";
+import { describeSelection } from "@/lib/selection";
 import { METHODS } from "./ScoringConfig";
 import { TemplateView } from "./TemplateView";
 import { Card } from "./ui";
@@ -58,6 +59,7 @@ export function RunMetadata({ run }: { run: Run }) {
                       <span className="font-mono">{d.filename}</span>
                     )}
                     <span className="tabular text-xs text-muted">{d.rows} rows</span>
+                    {describeSelection(d.selection) && <span className="text-xs text-ink-2">· {describeSelection(d.selection)}</span>}
                   </div>
                   <div className="ml-5 flex flex-wrap gap-x-3 text-xs text-ink-2">
                     {Object.entries(d.mapping).map(([v, c]) => (
