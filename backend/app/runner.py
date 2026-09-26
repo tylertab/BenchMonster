@@ -93,7 +93,7 @@ async def _run_input(run_id: int, run, model, inp, params, sem: asyncio.Semaphor
 
 BATCH_INSTRUCTIONS = """You will receive {n} separate inputs, each under a "### Input k" heading. Handle each one independently, exactly as its own instructions say, as if it were the only input.
 
-Return ONLY a JSON array with exactly {n} elements, in input order: element k is your complete answer to Input k. If an input asks for a JSON object, that element is the object itself; otherwise it is a string. No prose outside the array."""
+Return ONLY a JSON array with exactly {n} elements, in input order: element k is your complete answer to Input k, written exactly as that input's instructions ask. If an input asks for a JSON object, that element is the object itself; otherwise it is a string holding the answer in the requested format (markdown, labels and all). Don't convert answers into a different structure. No prose outside the array."""
 
 
 def build_batch_messages(run, prompts: list[str]) -> list[dict]:
