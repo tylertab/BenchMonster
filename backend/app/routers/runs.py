@@ -1,133 +1,16 @@
 import csv
 import io
-import re
-from datetime import datetime, timezone
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
 
-from .. import auth, db, runner, scoring, templates
+from .. import auth, db, templates
 
 router = APIRouter(prefix="/api/runs", tags=["runs"])
 
 MAX_INPUTS = 10_000
 NEEDS_EXPECTED = {"exact", "contains", "numeric", "json_fields"}
-
-
-# --- Create -----------------------------------------------------------------
-
-
-class RunDatasetIn(BaseModel):
-    dataset_id: int
-    mapping: dict[str, str] = {}  # {template variable: dataset column}
-    expected_column: str | None = None
-
-
-class RunIn(BaseModel):
-    name: str | None = Field(None, max_length=200)
-    prompt_id: int
-    # Optional per-run overrides of the prompt (e.g. from clone & edit).
-    template: str | None = Field(None, max_length=50000)
-    system_prompt: str | None = Field(None, max_length=20000)
-    datasets: list[RunDatasetIn] = Field(min_length=1, max_length=20)
-    scoring_method: Literal[scoring.METHODS]  # type: ignore[valid-type]
-    scoring_config: dict = {}
-    model_ids: list[int] = Field(min_length=1)
-    max_tokens: int = Field(4096, ge=16, le=32768)
-    temperature: float = Field(0.0, ge=0, le=2)
-    concurrency: int = Field(8, ge=1, le=32)
-    output_name: str | None = Field(None, max_length=200)
-
-
-def _slug(s: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "-", s.lower()).strip("-")[:60] or "run"
-
-
-def _output_name(requested: str | None, prompt_name: str) -> str:
-    if requested and requested.strip():
-        base = re.sub(r"\s+", "-", re.sub(r"[^\w.\- ]+", "", requested.strip()).strip()) or "predictions"
-    else:
-        base = f"{_slug(prompt_name)}-{datetime.now(timezone.utc):%Y%m%d-%H%M}-predictions"
-    return base if base.lower().endswith(".csv") else f"{base}.csv"
-
-
-@router.post("")
-async def create_run(body: RunIn, ctx: auth.Ctx = Depends(auth.current_ctx)):
-    pool = db.pool()
-    prompt = await pool.fetchrow("select * from prompts where id = $1 and org_id = $2", body.prompt_id, ctx.org_id)
-    if not prompt:
-        raise HTTPException(404, "prompt not found")
-    template = body.template if body.template is not None else prompt["template"]
-    system_prompt = body.system_prompt if body.system_prompt is not None else prompt["system_prompt"]
-    variables = templates.variables(template)
-    if not variables:
-        raise HTTPException(400, "the template has no {{variables}}")
-    if body.scoring_method == "json_schema" and not body.scoring_config.get("schema"):
-        raise HTTPException(400, "json_schema scoring needs scoring_config.schema")
-
-    found = await pool.fetchval(
-        "select count(*) from models where id = any($1) and active and (org_id is null or org_id = $2)",
-        body.model_ids, ctx.org_id,
-    )
-    if found != len(set(body.model_ids)):
-        raise HTTPException(400, "unknown or inactive model id")
-
-    # Validate every dataset and render every input before writing anything.
-    run_datasets, inputs = [], []
-    for pos, rd in enumerate(body.datasets):
-        ds = await pool.fetchrow(
-            "select id, name, filename, columns from datasets where id = $1 and org_id = $2", rd.dataset_id, ctx.org_id
-        )
-        if not ds:
-            raise HTTPException(404, f"dataset {rd.dataset_id} not found")
-        cols = set(ds["columns"])
-        # Unmapped variables default to a same-named column.
-        mapping = {v: rd.mapping.get(v) or v for v in variables}
-        missing = [f"{{{{{v}}}}} → {c}" for v, c in mapping.items() if c not in cols]
-        if missing:
-            raise HTTPException(400, f"{ds['filename']}: no column for {', '.join(missing)}")
-        if rd.expected_column and rd.expected_column not in cols:
-            raise HTTPException(400, f"{ds['filename']}: no column {rd.expected_column!r}")
-        if body.scoring_method in NEEDS_EXPECTED and not rd.expected_column:
-            raise HTTPException(400, f"{ds['filename']}: {body.scoring_method} scoring needs an expected column")
-        run_datasets.append((pos, ds["id"], ds["name"], ds["filename"], mapping, rd.expected_column))
-        rows = await pool.fetch("select idx, data from dataset_rows where dataset_id = $1 order by idx", ds["id"])
-        for r in rows:
-            values = {v: r["data"].get(c, "") for v, c in mapping.items()}
-            expected = r["data"].get(rd.expected_column) if rd.expected_column else None
-            inputs.append((pos, r["idx"], values, templates.render(template, values), expected))
-        if len(inputs) > MAX_INPUTS:
-            raise HTTPException(400, f"too many inputs ({len(inputs)}+); the limit is {MAX_INPUTS}")
-    if not inputs:
-        raise HTTPException(400, "the selected datasets have no rows")
-
-    params = {"max_tokens": body.max_tokens, "temperature": body.temperature, "concurrency": body.concurrency}
-    async with pool.acquire() as conn, conn.transaction():
-        run_id = await conn.fetchval(
-            """insert into runs (org_id, name, prompt_id, prompt_name, system_prompt, template,
-                   scoring_method, scoring_config, params, total_inputs, output_name, created_by)
-               values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) returning id""",
-            ctx.org_id, (body.name or "").strip() or None, prompt["id"], prompt["name"],
-            (system_prompt or "").strip() or None, template, body.scoring_method, body.scoring_config,
-            params, len(inputs), _output_name(body.output_name, prompt["name"]), ctx.user_id,
-        )
-        await conn.executemany(
-            """insert into run_datasets (run_id, position, dataset_id, dataset_name, filename, mapping, expected_column)
-               values ($1, $2, $3, $4, $5, $6, $7)""",
-            [(run_id, *rd) for rd in run_datasets],
-        )
-        await conn.executemany(
-            """insert into run_inputs (run_id, dataset_position, row_idx, variables, prompt, expected)
-               values ($1, $2, $3, $4, $5, $6)""",
-            [(run_id, *i) for i in inputs],
-        )
-        await conn.executemany(
-            "insert into run_models (run_id, model_id) values ($1, $2)", [(run_id, m) for m in set(body.model_ids)]
-        )
-    runner.start(run_id)
-    return {"id": run_id}
 
 
 # --- List (dashboard) ---------------------------------------------------------
@@ -138,6 +21,8 @@ async def list_runs(
     q: str | None = None,
     status: str | None = None,
     prompt_id: int | None = None,
+    profile_id: int | None = None,
+    version: int | None = None,
     dataset_id: int | None = None,
     model_id: int | None = None,
     sort: Literal["newest", "oldest"] = "newest",
@@ -145,7 +30,7 @@ async def list_runs(
     offset: int = Query(0, ge=0),
     ctx: auth.Ctx = Depends(auth.current_ctx),
 ):
-    """Runs with their metadata; `q` searches run/prompt names, template, file names, and models."""
+    """Runs with their metadata; `q` searches run/profile/prompt names, template, file names, and models."""
     where = ["r.org_id = $1"]
     args: list = [ctx.org_id]
 
@@ -161,6 +46,7 @@ async def list_runs(
             p = arg(f"%{term}%")
             where.append(
                 f"""(r.name ilike {p} or r.prompt_name ilike {p} or r.template ilike {p} or r.output_name ilike {p}
+                     or exists (select 1 from benchmark_profiles bp where bp.id = r.profile_id and bp.name ilike {p})
                      or exists (select 1 from run_datasets rd where rd.run_id = r.id
                                 and (rd.filename ilike {p} or rd.dataset_name ilike {p}))
                      or exists (select 1 from run_models rm join models m on m.id = rm.model_id
@@ -170,6 +56,10 @@ async def list_runs(
         where.append(f"r.status = {arg(status)}")
     if prompt_id:
         where.append(f"r.prompt_id = {arg(prompt_id)}")
+    if profile_id:
+        where.append(f"r.profile_id = {arg(profile_id)}")
+    if version:
+        where.append(f"r.profile_version = {arg(version)}")
     if dataset_id:
         where.append(f"exists (select 1 from run_datasets rd where rd.run_id = r.id and rd.dataset_id = {arg(dataset_id)})")
     if model_id:
@@ -180,6 +70,7 @@ async def list_runs(
     total = await pool.fetchval(f"select count(*) from runs r where {cond}", *args)
     rows = await pool.fetch(
         f"""select r.id, r.name, r.status, r.prompt_id, r.prompt_name, r.template, r.output_name,
+                   r.profile_id, r.profile_version, (select name from benchmark_profiles bp where bp.id = r.profile_id) as profile_name,
                    r.scoring_method, r.total_inputs, r.created_at, r.started_at, r.finished_at,
                    u.name as created_by,
                    (select coalesce(json_agg(rd.filename order by rd.position), '[]')
@@ -216,7 +107,9 @@ async def get_run(run_id: int, ctx: auth.Ctx = Depends(auth.current_ctx)):
     """Run metadata, per-model progress, and summary metrics (for polling)."""
     pool = db.pool()
     run = await pool.fetchrow(
-        """select r.*, u.name as created_by_name from runs r left join users u on u.id = r.created_by
+        """select r.*, u.name as created_by_name, bp.name as profile_name, bp.current_version as profile_current_version
+           from runs r left join users u on u.id = r.created_by
+           left join benchmark_profiles bp on bp.id = r.profile_id
            where r.id = $1 and r.org_id = $2""",
         run_id, ctx.org_id,
     )
@@ -243,22 +136,6 @@ async def get_run(run_id: int, ctx: auth.Ctx = Depends(auth.current_ctx)):
         "models": [dict(m) for m in models],
         "summary": [dict(s) for s in summary],
     }
-
-
-@router.get("/{run_id}/config")
-async def get_run_config(run_id: int, ctx: auth.Ctx = Depends(auth.current_ctx)):
-    """Everything needed to prefill a new run from this one (clone & edit)."""
-    await auth.run_in_org(run_id, ctx.org_id)
-    pool = db.pool()
-    run = await pool.fetchrow(
-        """select r.name, r.prompt_id, r.prompt_name, r.template, r.system_prompt, r.scoring_method,
-                  r.scoring_config, r.params, r.output_name,
-                  p.template as current_template, p.system_prompt as current_system_prompt
-           from runs r left join prompts p on p.id = r.prompt_id where r.id = $1""",
-        run_id,
-    )
-    model_ids = [r["model_id"] for r in await pool.fetch("select model_id from run_models where run_id = $1", run_id)]
-    return {**dict(run), "datasets": await _datasets(run_id), "model_ids": model_ids}
 
 
 @router.get("/{run_id}/results")
