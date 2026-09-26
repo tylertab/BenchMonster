@@ -39,7 +39,7 @@ export function RunMetadata({ run }: { run: Run }) {
               <div className="mb-2 space-y-0.5 text-xs text-ink-2">
                 {Object.entries(run.bindings).map(([name, b]) => (
                   <div key={name}>
-                    <code className="text-accent">{`{{${name}}}`}</code> ← {b.type === "text" ? "fixed text" : `whole dataset ${b.filename ?? b.dataset_id} as ${b.format.toUpperCase()}`}
+                    <code className="text-accent">{`{{${name}}}`}</code> ← {b.type === "text" ? "value" : `dataset ${b.filename ?? b.dataset_id} as ${b.format.toUpperCase()}`}
                   </div>
                 ))}
               </div>
@@ -67,8 +67,8 @@ export function RunMetadata({ run }: { run: Run }) {
                     ))}
                     {d.expected_dataset_id || d.expected_filename ? (
                       <span>
-                        expected ← <span className="font-mono">{d.expected_filename}</span> ({d.input_key ? `${d.input_key} = ${d.expected_key}` : "row order"}
-                        {d.expected_column ? `, ${d.expected_column}` : ", whole row"})
+                        expected ← <span className="font-mono">{d.expected_filename}</span> ({d.input_key ? `${d.input_key} = ${d.expected_key}` : "record order"}
+                        {d.expected_column ? `, ${d.expected_column}` : ", whole record"})
                       </span>
                     ) : (
                       d.expected_column && <span>expected ← {d.expected_column}</span>

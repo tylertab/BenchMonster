@@ -23,7 +23,7 @@ export type InputSet = {
 const EXPECTED_GUESSES = ["expected", "expected_output", "answer", "output", "target", "label", "gold", "reference"];
 export const guessExpected = (columns: string[]) => columns.find((c) => EXPECTED_GUESSES.includes(c.toLowerCase())) ?? "";
 
-/** A column both files share, preferring id-like names; used to match rows. */
+/** A field both files share, preferring id-like names; used to match records. */
 export function guessKey(a: string[], b: string[]): string {
   const shared = a.filter((c) => b.includes(c));
   return shared.find((c) => /(^|_)id$/i.test(c)) ?? shared.find((c) => /id|key/i.test(c)) ?? shared[0] ?? "";
@@ -126,7 +126,7 @@ export function ExpectedOutputCard({ set, datasets, onChange, onUploaded }: {
               }
               className={`rounded-full border px-2.5 py-0.5 text-xs ${set.expectedSource === src ? "border-accent bg-accent/10 text-accent" : "border-line text-ink-2 hover:bg-surface-2"}`}
             >
-              {src === "dataset" ? "Separate file" : src === "column" ? "Column in the input file" : "None"}
+              {src === "dataset" ? "Separate file" : src === "column" ? "Field in the input file" : "None"}
             </button>
           ))}
         </span>
@@ -153,7 +153,7 @@ export function ExpectedOutputCard({ set, datasets, onChange, onUploaded }: {
 
       {set.expectedSource === "column" && (
         <label className="mt-2 flex items-center gap-2 text-sm">
-          <span className="text-xs text-ink-2">Column</span>
+          <span className="text-xs text-ink-2">Field</span>
           <select className={compactInputClass} value={set.expectedColumn} onChange={(e) => onChange({ ...set, expectedColumn: e.target.value })} aria-label="Expected column">
             <option value="">choose…</option>
             {set.input.columns.map((c) => (
@@ -174,7 +174,7 @@ export function ExpectedOutputCard({ set, datasets, onChange, onUploaded }: {
             </button>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <span className="w-24 text-xs text-ink-2">Match rows</span>
+            <span className="w-24 text-xs text-ink-2">Match records</span>
             <select
               className={compactInputClass}
               value={set.matchBy}
@@ -185,20 +185,20 @@ export function ExpectedOutputCard({ set, datasets, onChange, onUploaded }: {
               }}
               aria-label="Match rows by"
             >
-              <option value="key">by key column</option>
-              <option value="order">by row order</option>
+              <option value="key">by key field</option>
+              <option value="order">by record order</option>
             </select>
             {set.matchBy === "key" && (
               <>
                 <select className={`${compactInputClass} ${set.inputKey ? "" : "border-critical"}`} value={set.inputKey} onChange={(e) => onChange({ ...set, inputKey: e.target.value })} aria-label="Input key column">
-                  <option value="">input column…</option>
+                  <option value="">input field…</option>
                   {set.input.columns.map((c) => (
                     <option key={c}>{c}</option>
                   ))}
                 </select>
                 <span className="text-muted">=</span>
                 <select className={`${compactInputClass} ${set.expectedKey ? "" : "border-critical"}`} value={set.expectedKey} onChange={(e) => onChange({ ...set, expectedKey: e.target.value })} aria-label="Expected key column">
-                  <option value="">expected column…</option>
+                  <option value="">expected field…</option>
                   {exp.columns.map((c) => (
                     <option key={c}>{c}</option>
                   ))}
@@ -209,8 +209,8 @@ export function ExpectedOutputCard({ set, datasets, onChange, onUploaded }: {
           <div className="flex flex-wrap items-center gap-2">
             <span className="w-24 text-xs text-ink-2">Expected value</span>
             <select className={compactInputClass} value={set.expectedValue} onChange={(e) => onChange({ ...set, expectedValue: e.target.value as "row" | "column" })} aria-label="Expected value">
-              <option value="row">whole row as JSON{set.matchBy === "key" && set.expectedKey ? ` (without ${set.expectedKey})` : ""}</option>
-              <option value="column">one column</option>
+              <option value="row">whole record as JSON{set.matchBy === "key" && set.expectedKey ? ` (without ${set.expectedKey})` : ""}</option>
+              <option value="column">one field</option>
             </select>
             {set.expectedValue === "column" && (
               <select className={`${compactInputClass} ${set.expectedColumn ? "" : "border-critical"}`} value={set.expectedColumn} onChange={(e) => onChange({ ...set, expectedColumn: e.target.value })} aria-label="Expected value column">
@@ -245,12 +245,12 @@ export function toRef(s: InputSet, mapping: Record<string, string>) {
 export function inputSetProblems(s: InputSet, needsExpected: boolean, label: string): string[] {
   const p: string[] = [];
   const name = s.input.filename;
-  if (s.expectedSource === "column" && !s.expectedColumn) p.push(`${name}: choose the expected column.`);
+  if (s.expectedSource === "column" && !s.expectedColumn) p.push(`${name}: choose the expected field.`);
   if (s.expectedSource === "dataset") {
     if (!s.expectedDataset) p.push(`${name}: choose the expected-output file.`);
     else {
-      if (s.matchBy === "key" && (!s.inputKey || !s.expectedKey)) p.push(`${name}: choose both key columns.`);
-      if (s.expectedValue === "column" && !s.expectedColumn) p.push(`${name}: choose the expected value column.`);
+      if (s.matchBy === "key" && (!s.inputKey || !s.expectedKey)) p.push(`${name}: choose both key fields.`);
+      if (s.expectedValue === "column" && !s.expectedColumn) p.push(`${name}: choose the expected value field.`);
     }
   }
   if (needsExpected && s.expectedSource === "none") p.push(`${name}: ${label} scoring needs expected outputs.`);

@@ -69,14 +69,14 @@ export function ProfileConfigView({ v }: { v: ProfileVersion }) {
                     <td className="py-1.5 text-ink-2">
                       {b?.type === "text" ? (
                         <>
-                          fixed text: <span className="text-ink">{b.value.length > 120 ? `${b.value.slice(0, 120)}…` : b.value}</span>
+                          value: <span className="text-ink">{b.value.length > 120 ? `${b.value.slice(0, 120)}…` : b.value}</span>
                         </>
                       ) : b?.type === "dataset" ? (
-                        <>whole dataset <span className="font-mono text-ink">{v.display_bindings?.[name]?.filename ?? `dataset ${b.dataset_id}`}</span> as {b.format.toUpperCase()}</>
+                        <>dataset <span className="font-mono text-ink">{v.display_bindings?.[name]?.filename ?? `dataset ${b.dataset_id}`}</span> as {b.format.toUpperCase()}</>
                       ) : whole ? (
-                        "whole record (JSON)"
+                        "record (all fields as JSON)"
                       ) : (
-                        <>record field {v.datasets.map((d) => <span key={d.position} className="mr-2 font-mono text-ink">{d.mapping[name]}</span>)}</>
+                        <>field {v.datasets.map((d) => <span key={d.position} className="mr-2 font-mono text-ink">{d.mapping[name]}</span>)}</>
                       )}
                     </td>
                   </tr>
@@ -118,12 +118,12 @@ export function ProfileConfigView({ v }: { v: ProfileVersion }) {
                       <FormatBadge format={d.expected_format} />
                       <DatasetLink id={d.expected_dataset_id} available={d.expected_available} filename={d.expected_filename ?? "?"} />
                       <span className="text-xs text-ink-2">
-                        matched {d.input_key ? `on ${d.input_key} = ${d.expected_key}` : "by row order"} · {d.expected_column ? `column ${d.expected_column}` : "whole row as JSON"}
+                        matched {d.input_key ? `on ${d.input_key} = ${d.expected_key}` : "by record order"} · {d.expected_column ? `field ${d.expected_column}` : "whole record as JSON"}
                       </span>
                     </>
                   ) : d.expected_column ? (
                     <span className="text-xs">
-                      column <code>{d.expected_column}</code> of the input file
+                      field <code>{d.expected_column}</code> of the input file
                     </span>
                   ) : (
                     <span className="text-xs text-muted">none</span>

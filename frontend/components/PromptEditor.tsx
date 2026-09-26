@@ -42,7 +42,7 @@ export function PromptEditor({ prompt, onSaved }: { prompt?: Prompt; onSaved: (p
         label="Template"
         hint={
           <>
-            Use <code>{"{{variable}}"}</code> placeholders; each maps to a dataset column when you start a run. Single braces are left alone, so JSON is fine.
+            Use <code>{"{{variable}}"}</code> placeholders; each maps to a dataset field when you start a run. Single braces are left alone, so JSON is fine.
           </>
         }
       >

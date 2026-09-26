@@ -20,7 +20,7 @@ export default function PromptsPage() {
       <div className="flex items-end gap-4">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Prompts</h1>
-          <p className="mt-1 text-sm text-ink-2">Reusable templates. Each {"{{variable}}"} is filled from a dataset column when you run it.</p>
+          <p className="mt-1 text-sm text-ink-2">Reusable templates. Each {"{{variable}}"} is filled from a dataset field when you run it.</p>
         </div>
         <Link href="/prompts/new" className="ml-auto rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-white hover:opacity-90">
           New prompt

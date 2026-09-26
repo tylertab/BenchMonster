@@ -28,16 +28,16 @@ type VarSource = "field" | "record" | "dataset" | "text";
 type InlineFormat = "json" | "jsonl" | "csv";
 
 const SOURCE_LABEL: Record<VarSource, string> = {
-  field: "Record field",
-  record: "Whole record (JSON)",
-  dataset: "Whole dataset",
-  text: "Fixed text",
+  field: "Field",
+  record: "Record",
+  dataset: "Dataset",
+  text: "Value",
 };
 const SOURCE_HINT: Record<VarSource, string> = {
-  field: "One column of each record; one prompt per record",
-  record: "Each record as a JSON object; one prompt per record",
-  dataset: "An entire file inlined into every prompt (catalogs, reference data)",
-  text: "The same text in every prompt",
+  field: "One field of each record; one prompt per record",
+  record: "All fields of each record as JSON; one prompt per record",
+  dataset: "All records of a file, inlined into every prompt (catalogs, reference data)",
+  text: "The same value in every prompt",
 };
 
 let nextKey = 0;
@@ -236,7 +236,7 @@ export function ProfileEditor({
     if (resolved.length === 0) problems.push(`Choose the file for ${recordVars.map((v) => `{{${v}}}`).join(", ")}.`);
     for (const s of resolved) {
       const unmapped = fieldVars.filter((v) => !s.mapping[v]);
-      if (unmapped.length) problems.push(`Choose the column for ${unmapped.map((v) => `{{${v}}}`).join(", ")}.`);
+      if (unmapped.length) problems.push(`Choose the field for ${unmapped.map((v) => `{{${v}}}`).join(", ")}.`);
       problems.push(...inputSetProblems(s, methodInfo.needsExpected, methodInfo.label));
     }
   } else if (methodInfo.needsExpected && !expectedText.trim()) {
@@ -290,7 +290,7 @@ export function ProfileEditor({
           variables.map((v) => {
             const src = sourceOf(v);
             if (src === "text") return [v, texts[v] ?? ""];
-            if (src === "dataset") return [v, inlines[v]?.datasetId ? `[whole dataset: ${byId.get(inlines[v].datasetId!)?.filename ?? "?"} as ${inlines[v].format}]` : `{{${v}}}`];
+            if (src === "dataset") return [v, inlines[v]?.datasetId ? `[dataset: ${byId.get(inlines[v].datasetId!)?.filename ?? "?"} as ${inlines[v].format}]` : `{{${v}}}`];
             const row = shownPreview?.rows[0];
             if (!row) return [v, `{{${v}}}`];
             if (src === "record") return [v, JSON.stringify(Object.fromEntries(resolved[0].input.columns.map((c) => [c, row[c]])))];
@@ -304,14 +304,18 @@ export function ProfileEditor({
     <div className="space-y-6">
       <Section n={1} title="Profile">
         <div className="space-y-4">
-          <div className="grid gap-3 sm:grid-cols-2">
-            <Field label="Name">
-              <input className={inputClass} value={name} onChange={(e) => setName(e.target.value)} placeholder="Support ticket triage" />
-            </Field>
-            <Field label="Description" hint="Optional">
-              <input className={inputClass} value={description} onChange={(e) => setDescription(e.target.value)} placeholder="What this benchmark measures" />
-            </Field>
-          </div>
+          <Field label="Name">
+            <input className={inputClass} value={name} onChange={(e) => setName(e.target.value)} placeholder="Support ticket triage" />
+          </Field>
+          <Field label="Description" hint="Optional: what this benchmark measures, how its data was built, anything a teammate should know">
+            <textarea
+              rows={4}
+              className={`${inputClass} resize-y`}
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder="What this benchmark measures, where the inputs and expected outputs come from, and what a good result looks like."
+            />
+          </Field>
           <div>
             <span className="mb-1.5 block text-sm font-medium">Run mode</span>
             <div className="grid gap-2 sm:grid-cols-2">
@@ -436,7 +440,7 @@ export function ProfileEditor({
                               onChange={(e) => setColumn(v, e.target.value)}
                               aria-label={`Column for ${v}`}
                             >
-                              <option value="">choose column…</option>
+                              <option value="">choose field…</option>
                               {recordSet.input.columns.map((c) => (
                                 <option key={c} value={c}>
                                   {c}
@@ -445,7 +449,7 @@ export function ProfileEditor({
                               ))}
                             </select>
                           )}
-                          {src === "record" && recordSet && <span className="text-xs text-ink-2">all {recordSet.input.columns.length} columns as JSON</span>}
+                          {src === "record" && recordSet && <span className="text-xs text-ink-2">all {recordSet.input.columns.length} fields as JSON</span>}
                         </>
                       )}
                       {src === "dataset" && (
@@ -459,7 +463,7 @@ export function ProfileEditor({
                             <option value="">choose dataset…</option>
                             {datasets.map((d) => (
                               <option key={d.id} value={d.id}>
-                                {d.filename} ({d.row_count} rows)
+                                {d.filename} ({d.row_count} records)
                               </option>
                             ))}
                           </select>
@@ -478,7 +482,7 @@ export function ProfileEditor({
                       <span className="ml-auto text-xs text-muted">{SOURCE_HINT[src]}</span>
                     </div>
                     {src === "text" && (
-                      <textarea rows={2} className={`${inputClass} mt-2`} value={texts[v] ?? ""} onChange={(e) => setTexts({ ...texts, [v]: e.target.value })} placeholder={`Value for {{${v}}}`} aria-label={`Text for ${v}`} />
+                      <textarea rows={2} className={`${inputClass} mt-2`} value={texts[v] ?? ""} onChange={(e) => setTexts({ ...texts, [v]: e.target.value })} placeholder={`Value of {{${v}}}`} aria-label={`Text for ${v}`} />
                     )}
                   </div>
                 );
@@ -504,8 +508,8 @@ export function ProfileEditor({
                 )}
                 {recordSet && wholeVars.length > 0 && recordSet.expectedSource === "column" && recordSet.expectedColumn && (
                   <p className="text-critical">
-                    The whole record includes the expected column <code>{recordSet.expectedColumn}</code>, so the answer would be in the prompt. Put expected outputs in a
-                    separate file, or use record fields instead.
+                    The record includes the expected field <code>{recordSet.expectedColumn}</code>, so the answer would be in the prompt. Put expected outputs in a
+                    separate file, or use individual fields instead.
                   </p>
                 )}
               </div>

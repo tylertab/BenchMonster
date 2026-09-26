@@ -110,7 +110,7 @@ export function SchemaEditor({ datasetId, columns, initial, onSaved }: {
           <table className="w-full text-sm">
             <thead className="bg-surface-2 text-left text-xs text-muted">
               <tr>
-                <th className="px-2 py-1.5 font-medium">Column</th>
+                <th className="px-2 py-1.5 font-medium">Field</th>
                 <th className="px-2 py-1.5 font-medium">Type</th>
                 <th className="px-2 py-1.5 font-medium">Required</th>
                 <th className="px-2 py-1.5 font-medium">Description</th>
@@ -136,7 +136,7 @@ export function SchemaEditor({ datasetId, columns, initial, onSaved }: {
                       <input type="checkbox" checked={required.has(c)} onChange={(e) => setRequired(c, e.target.checked)} aria-label={`${c} required`} />
                     </td>
                     <td className="px-2 py-1">
-                      <input className={`${inputClass} py-1`} value={typeof p.description === "string" ? p.description : ""} onChange={(e) => setProp(c, { description: e.target.value || undefined })} placeholder="What this column holds" />
+                      <textarea rows={2} className={`${inputClass} resize-y py-1`} value={typeof p.description === "string" ? p.description : ""} onChange={(e) => setProp(c, { description: e.target.value || undefined })} placeholder="What this field holds" />
                     </td>
                     <td className="px-2 py-1.5 font-mono text-xs text-muted">{extra.length ? extra.join(", ") : "–"}</td>
                   </tr>
@@ -146,7 +146,7 @@ export function SchemaEditor({ datasetId, columns, initial, onSaved }: {
           </table>
         </div>
       )}
-      <p className="text-xs text-muted">Values are stored as text; validation converts them to each column&apos;s type first. Use JSON view for enums, patterns, or nested objects.</p>
+      <p className="text-xs text-muted">Values are stored as text; validation converts them to each field&apos;s type first. Use JSON view for enums, patterns, or nested objects.</p>
       <ErrorNote error={error} />
       {report && (
         <div className={`rounded-md border px-3 py-2 text-sm ${report.invalid ? "border-critical/30 bg-critical/10" : "border-good/30 bg-good/10"}`}>

@@ -69,7 +69,7 @@ export default function DatasetsPage() {
             <thead className="text-left text-xs text-muted">
               <tr>
                 <th className="pb-2 font-medium">File</th>
-                <th className="pb-2 font-medium">Columns</th>
+                <th className="pb-2 font-medium">Fields</th>
                 <th className="pb-2 text-right font-medium">Rows</th>
                 <th className="pb-2 text-right font-medium">Used as input</th>
                 <th className="pb-2 text-right font-medium">As expected</th>

@@ -66,7 +66,7 @@ export default function DatasetPage() {
             {ds.filename}
           </h1>
           <p className="mt-1 text-sm text-ink-2">
-            {ds.row_count.toLocaleString()} rows · {ds.columns.length} columns · uploaded {when(ds.created_at)}
+            {ds.row_count.toLocaleString()} records · {ds.columns.length} fields · uploaded {when(ds.created_at)}
             {ds.created_by && ` by ${ds.created_by}`} · used as input in {ds.run_count} run{ds.run_count === 1 ? "" : "s"}, as expected outputs in{" "}
             {ds.expected_run_count}
           </p>
