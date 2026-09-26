@@ -49,12 +49,15 @@ def bands(mask: np.ndarray, min_gap: int = 12, min_pixels: int = 4) -> list[tupl
     return out
 
 
-def cut(img: np.ndarray, bg: np.ndarray, top: int, bottom: int, pad: int = 6, holes: bool = False) -> Image.Image:
+def cut(img: np.ndarray, bg: np.ndarray, top: int, bottom: int, pad: int = 6, holes: bool = False,
+        enclosed_min_area: int | None = None) -> Image.Image:
     """Crop a band and make its background transparent.
 
-    holes=False: only background connected to the border is removed (keeps white
-    areas inside artwork, like the monster's eyes). holes=True: every
-    background-colored pixel is removed, so letter counters (b, e, o) go clear.
+    Background connected to the crop border is always removed. holes=True also
+    removes every enclosed background-colored region (letter counters in b, e, o).
+    enclosed_min_area removes only enclosed regions at least that large: gaps
+    between the monster's limbs go, while its eyes and teeth (smaller, but just as
+    white) stay opaque.
     """
     dist_all = np.linalg.norm(img - bg, axis=2)
     cols = np.where((dist_all[top:bottom + 1] > FG_DIST).sum(axis=0) > 0)[0]
@@ -64,12 +67,22 @@ def cut(img: np.ndarray, bg: np.ndarray, top: int, bottom: int, pad: int = 6, ho
     dist = dist_all[y0:y1, x0:x1]
 
     # Background = background-colored pixels connected to the crop's border.
+    labels, n = ndimage.label(dist < BG_DIST)
+    edge = set(np.unique(np.concatenate([labels[0], labels[-1], labels[:, 0], labels[:, -1]]))) - {0}
     if holes:
-        background = dist < BG_DIST
+        keep = set(range(1, n + 1))
     else:
-        labels, _ = ndimage.label(dist < BG_DIST)
-        edge = set(np.unique(np.concatenate([labels[0], labels[-1], labels[:, 0], labels[:, -1]]))) - {0}
-        background = np.isin(labels, list(edge))
+        keep = set(edge)
+        if enclosed_min_area:
+            areas = ndimage.sum(np.ones_like(labels), labels, index=range(1, n + 1))
+            keep |= {i for i, a in zip(range(1, n + 1), areas) if i not in edge and a >= enclosed_min_area}
+    background = np.isin(labels, list(keep))
+
+    # The page background is a gradient (whiter near the artwork), so estimate it
+    # locally from nearby background pixels for the edge unmixing below.
+    w = ndimage.gaussian_filter(background.astype(float), 12)
+    local = np.stack([ndimage.gaussian_filter(crop[..., c] * background, 12) for c in range(3)], axis=2)
+    bg = np.where(w[..., None] > 1e-3, local / np.maximum(w, 1e-3)[..., None], bg)
     fringe = ndimage.binary_dilation(background, iterations=3) & ~background
 
     # Color-to-alpha on the fringe: how far each channel is pushed from the background.
@@ -116,7 +129,7 @@ def main() -> None:
     print("background", bg.round(1), "bands", found)
 
     OUT.mkdir(parents=True, exist_ok=True)
-    icon = cut(img, bg, it, ib)
+    icon = cut(img, bg, it, ib, enclosed_min_area=2200)
     wordmark = cut(img, bg, wt, wb, holes=True)
     tagline = cut(img, bg, tt, tb, holes=True)
 
