@@ -3,5 +3,6 @@ uvicorn[standard]>=0.32
 asyncpg>=0.30
 httpx>=0.28
 pydantic-settings>=2.6
+email-validator>=2.2
 python-multipart>=0.0.12
 jsonschema>=4.23

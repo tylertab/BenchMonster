@@ -21,7 +21,7 @@ TOOLS = [
         "function": {
             "name": "run_sql",
             "description": (
-                "Run one read-only PostgreSQL SELECT against the analytics views. "
+                "Run one read-only PostgreSQL SELECT against the results views. "
                 "Always filter by the current run_id unless comparing runs. Returns up to 50 rows."
             ),
             "parameters": {
@@ -54,10 +54,10 @@ SYSTEM = """You are BenchMonster's benchmark analyst. You help the user understa
 ## Current run
 run_id = {run_id}; benchmark "{benchmark}" (scoring: {scoring_method}); status {status}; {total_cases} cases per model.
 
-Per-model summary (from analytics.model_summary):
+Per-model summary (from model_summary):
 {summary}
 
-## Schema (PostgreSQL; views live in schema `analytics`, which is the search_path)
+## Schema (PostgreSQL views; they are on the search_path, so don't schema-qualify them)
 {schema}
 
 Notes: score is 0..1, passed is boolean; latency/ttft in ms; cost_usd in USD; tokens_per_sec is end-to-end throughput.
@@ -89,7 +89,7 @@ def _summary_text(rows) -> str:
     return "\n".join(json.dumps({k: _fmt(r[k]) for k in keys}) for r in rows)
 
 
-async def _system_prompt(run_id: int, user_message: str) -> str:
+async def _system_prompt(org_id: int, run_id: int, user_message: str) -> str:
     pool = db.pool()
     run = await pool.fetchrow(
         """select r.id, r.status, r.total_cases, b.name, b.scoring_method
@@ -99,7 +99,7 @@ async def _system_prompt(run_id: int, user_message: str) -> str:
     if not run:
         raise LookupError("run not found")
     summary = await pool.fetch("select * from analytics.model_summary where run_id = $1", run_id)
-    memories = await memory.search(f"run {run_id} {run['name']}: {user_message}")
+    memories = await memory.search(org_id, f"run {run_id} {run['name']}: {user_message}")
     return SYSTEM.format(
         run_id=run_id,
         benchmark=run["name"],
@@ -107,17 +107,17 @@ async def _system_prompt(run_id: int, user_message: str) -> str:
         status=run["status"],
         total_cases=run["total_cases"],
         summary=_summary_text(summary),
-        schema=sqlconsole.schema_as_text(await sqlconsole.schema()),
+        schema=sqlconsole.schema_as_text(await sqlconsole.schema(org_id)),
         memories="\n".join(f"- {m}" for m in memories) or "(nothing yet)",
     )
 
 
-async def _run_tool(run_id: int, name: str, args: dict) -> tuple[str, dict]:
+async def _run_tool(org_id: int, run_id: int, name: str, args: dict) -> tuple[str, dict]:
     """Returns (text for the model, record for the UI)."""
     if name == "run_sql":
         sql = args.get("sql", "")
         try:
-            res = await sqlconsole.run(sql, max_rows=ROWS_FOR_MODEL)
+            res = await sqlconsole.run(org_id, sql, max_rows=ROWS_FOR_MODEL)
         except sqlconsole.QueryError as e:
             return f"ERROR: {e}", {"tool": name, "sql": sql, "error": str(e)}
         cols = [c["name"] for c in res["columns"]]
@@ -126,7 +126,7 @@ async def _run_tool(run_id: int, name: str, args: dict) -> tuple[str, dict]:
         return text, {"tool": name, "sql": sql, "columns": cols, "rows": rows, "truncated": res["truncated"]}
     if name == "save_finding":
         finding = args.get("finding", "").strip()
-        ok = await memory.add(f"[run {run_id}] {finding}", {"run_id": run_id}) if finding else False
+        ok = await memory.add(org_id, f"[run {run_id}] {finding}", {"run_id": run_id}) if finding else False
         return ("saved" if ok else "memory unavailable"), {"tool": name, "finding": finding, "saved": ok}
     return f"ERROR: unknown tool {name}", {"tool": name, "error": "unknown tool"}
 
@@ -139,8 +139,9 @@ async def history(run_id: int) -> list[dict]:
     return [dict(r) for r in rows]
 
 
-async def chat(run_id: int, user_message: str) -> dict:
-    system = await _system_prompt(run_id, user_message)
+async def chat(org_id: int, run_id: int, user_message: str) -> dict:
+    """One analyst turn. Caller must have checked that run_id belongs to org_id."""
+    system = await _system_prompt(org_id, run_id, user_message)
     past = await db.pool().fetch(
         """select role, content from (
                select id, role, content from assistant_messages
@@ -168,7 +169,7 @@ async def chat(run_id: int, user_message: str) -> dict:
                 args = json.loads(call["function"].get("arguments") or "{}")
             except json.JSONDecodeError:
                 args = {}
-            text, record = await _run_tool(run_id, call["function"]["name"], args)
+            text, record = await _run_tool(org_id, run_id, call["function"]["name"], args)
             tool_records.append(record)
             messages.append({"role": "tool", "tool_call_id": call["id"], "content": text})
     if not reply:

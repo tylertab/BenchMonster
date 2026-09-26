@@ -3,7 +3,9 @@ services:
     build: ../backend
     env_file: ../.env
     environment:
-      CORS_ORIGINS: '["https://${APP_DOMAIN}"]'
+      CORS_ORIGINS: '["https://${APP_DOMAIN}", "https://www.${APP_DOMAIN}"]'
+      COOKIE_SECURE: "true"
+      PUBLIC_URL: https://www.${APP_DOMAIN}
     restart: unless-stopped
 
   frontend:

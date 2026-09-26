@@ -1,30 +1,61 @@
-"""Run user (or assistant) SQL against the analytics views as `bench_reader`.
+"""Run user (or assistant) SQL as the org's own reader role.
 
-Defense in depth: the role can only SELECT from analytics.* and has a 5s
-statement_timeout; here we also force a READ ONLY transaction that is always
-rolled back (so a user's SET can't leak into the pooled connection), and we
-use the extended protocol, which rejects multi-statement strings.
+Each org connects as `org_<id>_reader`, which can only read the `org_<id>`
+views (pre-filtered to that org) and has a 5s statement_timeout. On top of
+that we force a READ ONLY transaction that is always rolled back (so a user's
+SET can't leak into the pooled connection), and use the extended protocol,
+which rejects multi-statement strings.
 """
 
+import asyncio
 import time
+from urllib.parse import urlparse
 
 import asyncpg
 
-from . import db
+from . import db, orgs
+from .config import settings
 
 MAX_ROWS = 1000
+_pools: dict[int, asyncpg.Pool] = {}
+_lock = asyncio.Lock()
 
 
 class QueryError(Exception):
     pass
 
 
-async def run(sql: str, max_rows: int = MAX_ROWS) -> dict:
+async def _org_pool(org_id: int) -> asyncpg.Pool:
+    if org_id in _pools:
+        return _pools[org_id]
+    async with _lock:
+        if org_id not in _pools:
+            password = await db.pool().fetchval("select reader_password from organizations where id = $1", org_id)
+            if not password:
+                async with db.pool().acquire() as conn:
+                    await orgs.provision_reader(conn, org_id)
+                password = await db.pool().fetchval("select reader_password from organizations where id = $1", org_id)
+            base = urlparse(settings.database_url)
+            _pools[org_id] = await asyncpg.create_pool(
+                host=base.hostname, port=base.port, database=base.path.lstrip("/"),
+                user=orgs.role_name(org_id), password=password, ssl="require",
+                min_size=0, max_size=3, init=db.init_conn,
+            )
+    return _pools[org_id]
+
+
+async def close_pools() -> None:
+    for p in _pools.values():
+        await p.close()
+    _pools.clear()
+
+
+async def run(org_id: int, sql: str, max_rows: int = MAX_ROWS) -> dict:
     sql = sql.strip().rstrip(";")
     if not sql:
         raise QueryError("empty query")
     start = time.perf_counter()
-    async with db.readonly_pool().acquire() as conn:
+    async with (await _org_pool(org_id)).acquire() as conn:
         tr = conn.transaction(readonly=True)
         await tr.start()
         try:
@@ -56,14 +87,15 @@ async def _limited(stmt, n: int):
             break
 
 
-async def schema() -> list[dict]:
-    """Views and columns visible to the console, for the UI sidebar and the assistant."""
-    rows = await db.readonly_pool().fetch(
-        """select table_name, column_name, data_type
-           from information_schema.columns
-           where table_schema = 'analytics'
-           order by table_name, ordinal_position"""
-    )
+async def schema(org_id: int) -> list[dict]:
+    """Views and columns visible to the org's console, for the UI and the assistant."""
+    async with (await _org_pool(org_id)).acquire() as conn:
+        rows = await conn.fetch(
+            """select table_name, column_name, data_type
+               from information_schema.columns
+               where table_schema = current_schema()
+               order by table_name, ordinal_position"""
+        )
     tables: dict[str, list] = {}
     for r in rows:
         tables.setdefault(r["table_name"], []).append({"name": r["column_name"], "type": r["data_type"]})
@@ -71,6 +103,4 @@ async def schema() -> list[dict]:
 
 
 def schema_as_text(tables: list[dict]) -> str:
-    return "\n".join(
-        f"analytics.{t['name']}({', '.join(c['name'] + ' ' + c['type'] for c in t['columns'])})" for t in tables
-    )
+    return "\n".join(f"{t['name']}({', '.join(c['name'] + ' ' + c['type'] for c in t['columns'])})" for t in tables)

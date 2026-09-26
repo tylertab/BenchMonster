@@ -9,15 +9,12 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=ROOT_ENV, extra="ignore")
 
     database_url: str
-    # Read-only role used by the SQL console; falls back to database_url in dev.
-    readonly_database_url: str | None = None
 
     vultr_inference_api_key: str = ""
     vultr_inference_base_url: str = "https://api.vultrinference.com/v1"
 
     backboard_api_key: str = ""
     backboard_base_url: str = "https://app.backboard.io/api"
-    backboard_assistant_id: str = ""
 
     elevenlabs_api_key: str = ""
     elevenlabs_voice_id: str = ""  # blank = voice.DEFAULT_VOICE
@@ -30,6 +27,11 @@ class Settings(BaseSettings):
     judge_model: str = "deepseek-v4.1-flash"
 
     cors_origins: list[str] = ["http://localhost:3000"]
+
+    # Session cookie over HTTPS only (set true in production).
+    cookie_secure: bool = False
+    # Base URL used in invitation links.
+    public_url: str = "http://localhost:3000"
 
 
 settings = Settings()
