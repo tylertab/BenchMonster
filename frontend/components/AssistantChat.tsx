@@ -34,8 +34,33 @@ function Markdown({ text }: { text: string }) {
   );
 }
 
-function ToolCallView({ call, onOpenSql }: { call: ToolCall; onOpenSql: (sql: string, source?: string | null) => void }) {
+/** A query the analyst wrote (not run): run it or open it in the console. */
+function QueryCard({ call, onOpenSql }: { call: Extract<ToolCall, { tool: "query" }>; onOpenSql: OpenSql }) {
+  return (
+    <div className="rounded-md border border-line bg-surface-2/50 text-xs">
+      <div className="flex flex-wrap items-center gap-2 border-b border-line px-2.5 py-1.5">
+        <span className="font-medium text-ink">{call.title || "Query"}</span>
+        <span className="rounded bg-accent/10 px-1.5 text-[11px] text-accent">{call.source ? `⇄ ${call.source}` : "BenchMonster data"}</span>
+        <span className="ml-auto flex gap-1.5">
+          <Button className="py-0.5 text-xs" onClick={() => onOpenSql(call.sql, call.source ?? null, true)} disabled={!!call.error}>
+            Run in console
+          </Button>
+          <Button variant="secondary" className="py-0.5 text-xs" onClick={() => onOpenSql(call.sql, call.source ?? null, false)}>
+            Open
+          </Button>
+        </span>
+      </div>
+      {call.error && <p className="px-2.5 pt-1.5 text-critical">{call.error}</p>}
+      <pre className="max-h-72 overflow-auto whitespace-pre-wrap p-2.5 font-mono">{call.sql}</pre>
+    </div>
+  );
+}
+
+type OpenSql = (sql: string, source: string | null, run: boolean) => void;
+
+function ToolCallView({ call, onOpenSql }: { call: ToolCall; onOpenSql: OpenSql }) {
   const [open, setOpen] = useState(false);
+  if (call.tool === "query") return <QueryCard call={call} onOpenSql={onOpenSql} />;
   if (call.tool === "save_finding") {
     return (
       <div className="rounded-md border border-line bg-surface-2/50 px-2.5 py-1.5 text-xs text-ink-2">
@@ -56,7 +81,7 @@ function ToolCallView({ call, onOpenSql }: { call: ToolCall; onOpenSql: (sql: st
           <pre className="overflow-x-auto whitespace-pre-wrap font-mono">{call.sql}</pre>
           {call.error ? <p className="text-critical">{call.error}</p> : call.columns && <ResultTable columns={call.columns} rows={call.rows ?? []} />}
           <div className="flex gap-2">
-            <Button variant="secondary" onClick={() => onOpenSql(call.sql, call.source ?? null)}>
+            <Button variant="secondary" onClick={() => onOpenSql(call.sql, call.source ?? null, false)}>
               Open in SQL console
             </Button>
             {call.columns && (
@@ -74,12 +99,15 @@ function ToolCallView({ call, onOpenSql }: { call: ToolCall; onOpenSql: (sql: st
 export function AssistantChat({
   scope,
   onOpenSql,
+  registerSend,
   headerActions,
   messages,
   setMessages,
 }: {
   scope: BMQueryScope;
-  onOpenSql: (sql: string, source?: string | null) => void;
+  onOpenSql: OpenSql;
+  /** Hands the page a way to send a message (e.g. a failed query to fix). */
+  registerSend?: (send: (text: string) => void) => void;
   headerActions?: ReactNode;
   messages: ChatMessage[];
   setMessages: React.Dispatch<React.SetStateAction<ChatMessage[]>>;
@@ -127,6 +155,10 @@ export function AssistantChat({
     }
   };
 
+  useEffect(() => {
+    registerSend?.(send);
+  });
+
   // Push-to-talk: click to record, click again to send. Voice replies are always spoken.
   const toggleMic = async () => {
     if (voice.state === "speaking") return voice.stopSpeaking();
@@ -171,8 +203,8 @@ export function AssistantChat({
           {messages.length === 0 && (
             <div className="space-y-2 pt-4 text-sm text-ink-2">
               <p>
-                Ask anything about {scope.kind === "run" ? "this run" : scope.kind === "profile" ? "this benchmark and its versions" : "all your benchmarks"}. I query the
-                results with SQL and remember key findings across sessions.
+                Ask anything about {scope.kind === "run" ? "this run" : scope.kind === "profile" ? "this benchmark and its versions" : "all your benchmarks"}. I write the SQL
+                for you to run (or open) in the console; if a query fails, send me the error and I&apos;ll fix it.
               </p>
               <div className="flex flex-wrap gap-1.5 pt-1">
                 {suggestions(scope).map((s) => (
@@ -197,7 +229,7 @@ export function AssistantChat({
               </div>
             ),
           )}
-          {busy && <p className="animate-pulse text-sm text-muted">Analyzing…</p>}
+          {busy && <p className="animate-pulse text-sm text-muted">Writing a query…</p>}
           {voice.error && <p className="text-sm text-critical">⚠️ {voice.error}</p>}
           <div ref={bottom} />
         </div>

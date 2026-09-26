@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useRef, useState } from "react";
 import { AssistantChat } from "@/components/AssistantChat";
-import { SqlConsole } from "@/components/SqlConsole";
+import { type ConsoleHandle, SqlConsole } from "@/components/SqlConsole";
 import { compactInputClass, StatusBadge } from "@/components/ui";
 import { api, type ChatMessage, type ProfileListItem, type Run } from "@/lib/api";
 import { type BMQueryScope, presetQueries, scopeKey } from "@/lib/bmquery";
@@ -13,16 +13,16 @@ import { type BMQueryScope, presetQueries, scopeKey } from "@/lib/bmquery";
 function Workspace({ scope }: { scope: BMQueryScope }) {
   const [sql, setSql] = useState(() => presetQueries(scope)[0].sql);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const switchSource = useRef<((name: string | null) => void) | null>(null);
-  // An analyst query opens in the console on the database it ran against.
-  const openSql = (text: string, source?: string | null) => {
-    switchSource.current?.(source ?? null);
-    setSql(text);
-  };
+  const consoleRef = useRef<ConsoleHandle | null>(null);
+  const sendRef = useRef<((text: string) => void) | null>(null);
+  // An analyst query opens (or runs) in the console on the database it was written for.
+  const openSql = (text: string, source: string | null, run: boolean) => consoleRef.current?.open(text, source, run);
+  const askFix = (text: string, error: string, source: string | null) =>
+    sendRef.current?.(`This query${source ? ` (source: ${source})` : ""} failed:\n\n${text}\n\nError: ${error}`);
   return (
     <div className="grid gap-6 xl:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
-      <SqlConsole sql={sql} onSqlChange={setSql} registerSourceSwitch={(fn) => (switchSource.current = fn)} />
-      <AssistantChat scope={scope} onOpenSql={openSql} messages={messages} setMessages={setMessages} />
+      <SqlConsole sql={sql} onSqlChange={setSql} registerConsole={(h) => (consoleRef.current = h)} onAskFix={askFix} />
+      <AssistantChat scope={scope} onOpenSql={openSql} registerSend={(f) => (sendRef.current = f)} messages={messages} setMessages={setMessages} />
     </div>
   );
 }

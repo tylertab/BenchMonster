@@ -52,16 +52,21 @@ const SHORT_TYPES: Record<string, string> = {
 };
 const shortType = (t: string) => SHORT_TYPES[t] ?? t;
 
-export function SqlConsole({ sql, onSqlChange, registerSourceSwitch }: {
+/** Lets the page load (and optionally run) a query on a source named by the analyst. */
+export type ConsoleHandle = { open: (sql: string, sourceName: string | null, run: boolean) => void };
+
+export function SqlConsole({ sql, onSqlChange, registerConsole, onAskFix }: {
   sql: string;
   onSqlChange: (s: string) => void;
-  /** Hands the parent a way to point the console at a source by name (null = BenchMonster data). */
-  registerSourceSwitch?: (fn: (name: string | null) => void) => void;
+  registerConsole?: (handle: ConsoleHandle) => void;
+  /** Send a failed query and its error to the analyst. */
+  onAskFix?: (sql: string, error: string, sourceName: string | null) => void;
 }) {
   const [schema, setSchema] = useState<SchemaTable[]>([]);
   const [result, setResult] = useState<QueryResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [ranSql, setRanSql] = useState(""); // last query run (for "ask the analyst to fix")
   const [openTable, setOpenTable] = useState<string | null>("results");
   // Where queries run: BenchMonster's own data (null) or a Postgres connection.
   const [source, setSource] = useState<number | null>(null);
@@ -82,6 +87,21 @@ export function SqlConsole({ sql, onSqlChange, registerSourceSwitch }: {
   const [saved, setSaved] = useState<SavedQuery[]>([]);
   const [resultSql, setResultSql] = useState("");
   const [exporting, setExporting] = useState<"csv" | "json" | null>(null);
+
+  const run = async (text = sql, on = source) => {
+    setBusy(true);
+    setError(null);
+    setRanSql(text);
+    try {
+      setResult(await api.query(text, on));
+      setResultSql(text);
+    } catch (e) {
+      setResult(null);
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const download = async (format: "csv" | "json") => {
     setExporting(format);
@@ -181,9 +201,14 @@ export function SqlConsole({ sql, onSqlChange, registerSourceSwitch }: {
   };
 
   useEffect(() => {
-    registerSourceSwitch?.((name) => {
-      const id = name ? (pgConnsRef.current.find((c) => c.name.toLowerCase() === name.toLowerCase())?.id ?? null) : null;
-      if (id !== sourceRef.current) switchSource(id, false);
+    registerConsole?.({
+      open: (text, name, andRun) => {
+        const id = name ? (pgConnsRef.current.find((c) => c.name.toLowerCase() === name.toLowerCase())?.id ?? null) : null;
+        if (id !== sourceRef.current) switchSource(id, false);
+        setActive(null);
+        onSqlChange(text);
+        if (andRun) run(text, id);
+      },
     });
   });
   useEffect(() => {
@@ -198,19 +223,6 @@ export function SqlConsole({ sql, onSqlChange, registerSourceSwitch }: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const run = async (text = sql, on = source) => {
-    setBusy(true);
-    setError(null);
-    try {
-      setResult(await api.query(text, on));
-      setResultSql(text);
-    } catch (e) {
-      setResult(null);
-      setError((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  };
 
 
   return (
@@ -351,6 +363,11 @@ export function SqlConsole({ sql, onSqlChange, registerSourceSwitch }: {
 
       <div className="mt-3">
         <ErrorNote error={error} />
+        {error && onAskFix && ranSql && (
+          <button type="button" className="mb-2 text-xs text-accent hover:underline" onClick={() => onAskFix(ranSql, error, sourceConn?.name ?? null)}>
+            Ask the analyst to fix this query →
+          </button>
+        )}
         {result && result.columns.length > 0 && (
           <>
             <div className="mb-1.5 flex items-center justify-end gap-2 text-xs">

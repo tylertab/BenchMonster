@@ -441,6 +441,7 @@ export type SchemaTable = { name: string; columns: { name: string; type: string 
 
 export type ToolCall =
   | { tool: "run_sql"; sql: string; source?: string | null; columns?: string[]; rows?: unknown[][]; truncated?: boolean; error?: string }
+  | { tool: "query"; title?: string | null; sql: string; source?: string | null; error?: string } // written, not run
   | { tool: "save_finding"; finding: string; saved: boolean };
 
 export type ChatMessage = {

@@ -18,9 +18,8 @@ from . import connections as conns
 from . import db, linked, memory, providers, sqlconsole
 from .config import settings
 
-MAX_TOOL_ROUNDS = 6
+MAX_TOOL_ROUNDS = 3  # write_query doesn't return data, so there's little to iterate on
 HISTORY_TURNS = 12
-ROWS_FOR_MODEL = 50
 
 
 @dataclass(frozen=True)
@@ -61,23 +60,23 @@ TOOLS = [
     {
         "type": "function",
         "function": {
-            "name": "run_sql",
+            "name": "write_query",
             "description": (
-                "Run one read-only PostgreSQL SELECT. By default it runs against BenchMonster's results views; "
-                "set source to a connected database's name to query that database instead. "
-                "Filter BenchMonster queries to the current scope (run_id / profile_id) unless asked to compare "
-                "more broadly. Returns up to 50 rows."
+                "Give the user a SQL query to run. It is NOT executed: it's shown to the user with buttons to "
+                "open or run it in the SQL console, and you never see its results unless the user pastes them. "
+                "Use one call per query; usually one query should answer the question."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "sql": {"type": "string", "description": "A single SELECT statement"},
+                    "title": {"type": "string", "description": "A few words saying what the query returns"},
+                    "sql": {"type": "string", "description": "A single read-only PostgreSQL SELECT statement"},
                     "source": {
                         "type": "string",
                         "description": "'benchmonster' (default) or the exact name of a connected database listed in the system prompt",
                     },
                 },
-                "required": ["sql"],
+                "required": ["title", "sql"],
             },
         },
     },
@@ -86,9 +85,8 @@ TOOLS = [
         "function": {
             "name": "save_finding",
             "description": (
-                "Save a durable, specific insight to the organization's long-term memory so it can be "
-                "recalled in future sessions (e.g. 'Triage v2's concise prompt cost 24% less but lost "
-                "9 points of all-fields accuracy, mostly on sentiment'). Only save concrete conclusions."
+                "Save a durable, specific fact the user told you (or that they confirmed from query results) to the "
+                "organization's long-term memory, e.g. 'In personality_survey, introversion_score is reversed'."
             ),
             "parameters": {
                 "type": "object",
@@ -99,31 +97,58 @@ TOOLS = [
     },
 ]
 
-SYSTEM = """You are BMQuery, BenchMonster's benchmark analyst. You help the user understand LLM benchmark results by querying the data with SQL.
+SYSTEM = """You are BMQuery, BenchMonster's benchmark analyst. You write SQL for the user to run against their LLM benchmark data. You do not run queries yourself: the only data you see is the Scope summary and the notes below. Never state results or numbers beyond those; write the query that answers the question and say what it will return.
 
-Concepts: a benchmark profile is a versioned configuration (prompt + input sets + scoring + models). Each run executes one profile version (profile_id, profile_version) over every input with every model; results has one row per (run, input, model).
+Concepts: a benchmark profile is a versioned configuration (prompt + record source + scoring + models). Each run executes one profile version (profile_id, profile_version) over every input with every model; results has one row per (run, input, model).
 
 ## Scope
 {scope}
 
+## What the data looks like (looked up for you)
+{notes}
+
 ## Schema (PostgreSQL views; they are on the search_path, so don't schema-qualify them)
 {schema}
 
-Notes: score is 0..1, passed is boolean; latency/ttft in ms; cost_usd in USD; tokens_per_sec is end-to-end throughput. Postgres can't use output aliases inside ORDER BY expressions; repeat the expression instead.
+Column meanings in results:
+- expected: the correct answer for the input (text). For classification tasks it's the class label, so GROUP BY expected gives per-class results.
+- output: the model's raw reply. processed_output: the reply after the profile's output processing (e.g. the extracted label). Compare processed_output with expected.
+- passed: whether it counted as correct (boolean). score: 0..1 (partial credit for some scoring methods; for exact match it equals passed).
+- error: non-null when the call failed. latency_ms / ttft_ms in milliseconds; cost_usd in USD; tokens_per_sec is end-to-end throughput.
+- variables: jsonb of the input's variable values; for runs that read a database table it holds only the row's key, e.g. {{"id": "1001"}}.
+- row_idx: the input's position; run_id / profile_id / profile_version / model identify the run and model.
+model_summary has one row per (run, model) with cases, errors, accuracy, pass_rate, latency percentiles and costs.
 
 ## Connected databases (source = the connection's name)
 {connections}
+
+## Query patterns
+Accuracy per class, one row per run and model:
+  select run_id, model, count(*) as cases, round(avg(passed::int)::numeric, 3) as accuracy,
+         round(avg(passed::int) filter (where expected = 'A')::numeric, 3) as a_acc,
+         round(avg(passed::int) filter (where expected = 'B')::numeric, 3) as b_acc
+  from results where run_id in (...) group by run_id, model order by run_id desc, accuracy desc
+Accuracy per class as rows instead of columns:
+  select run_id, model, expected, count(*) as cases, round(avg(passed::int)::numeric, 3) as accuracy
+  from results where ... group by run_id, model, expected order by run_id, model, expected
+Compare versions of a profile:
+  select profile_version, model, round(avg(accuracy)::numeric, 3) as accuracy, sum(total_cost_usd) as cost
+  from model_summary where profile_id = N group by profile_version, model order by profile_version, accuracy desc
+Most common mistakes:
+  select expected, processed_output, count(*) from results where run_id = N and not passed
+  group by expected, processed_output order by count(*) desc limit 20
+Postgres notes: FILTER goes right after the aggregate: avg(x) filter (where ...), then round(...::numeric, 3) around it. Output aliases can't be used inside ORDER BY expressions (repeat the expression). Cast booleans with ::int before averaging.
 
 ## Things you remember from earlier sessions
 {memories}
 
 ## How to work
-- Use run_sql to get facts; never invent numbers. Keep queries small and filtered to the scope.
-- If a query errors, read the error and fix the query.
-- BenchMonster data and each connected database are separate databases: one query can't join across them. Query each and combine the results yourself (e.g. results.variables holds the source row's key for runs that read a connected table).
-- Answer concisely in plain language with the key numbers. You may be read aloud, so avoid big tables unless asked.
-- When you reach a notable, durable conclusion, call save_finding BEFORE writing your answer. Your final message must contain the complete answer (tables included), never just a note that you saved something.
-- When asked for a table, include it as a markdown table in the answer, and mention the SQL can be opened in the console.
+- Plan the query from the schema and the notes above, then call write_query once with a query that fully answers the question. Only use tables and columns listed above. Don't write exploratory queries.
+- Filter to the current scope (run_id / profile_id) unless the user asks more broadly.
+- BenchMonster data and each connected database are separate databases: one query can't join across them. If a question needs both, write one query per source and say how to combine them.
+- If the user reports an error, find the cause, fix it and call write_query again with the corrected query.
+- After writing the query, reply briefly: what it returns (its columns) and anything to change (e.g. which run ids to put in). Don't paste the SQL into your reply; it's shown from write_query. Keep it short; you may be read aloud.
+- If the user shares results or facts worth keeping, you may call save_finding.
 """
 
 
@@ -220,6 +245,54 @@ Compare across profiles, versions, and models as the user asks."""
     return text, "all benchmarks"
 
 
+async def _data_notes(scope: Scope) -> str:
+    """Facts the analyst would otherwise have to query for: run ids, models, the answer values and
+    input keys of each profile in scope (read from its latest run)."""
+    pool = db.pool()
+    if scope.run_id:
+        profiles = await pool.fetch(
+            "select p.id, p.name from runs r join benchmark_profiles p on p.id = r.profile_id where r.id = $1", scope.run_id
+        )
+    elif scope.profile_id:
+        profiles = await pool.fetch("select id, name from benchmark_profiles where id = $1", scope.profile_id)
+    else:
+        profiles = await pool.fetch(
+            "select id, name from benchmark_profiles where org_id = $1 order by updated_at desc limit 15", scope.org_id
+        )
+    lines = []
+    for p in profiles:
+        runs = await pool.fetch(
+            "select id from runs where profile_id = $1 and status in ('completed', 'running', 'failed') order by id desc limit 12", p["id"]
+        )
+        if not runs:
+            lines.append(f'- "{p["name"]}" (profile_id {p["id"]}): no runs yet')
+            continue
+        latest = runs[0]["id"]
+        expected = await pool.fetch(
+            """select expected, count(*) as n from (select expected from run_inputs where run_id = $1 and expected is not null limit 5000) s
+               group by expected order by n desc limit 20""",
+            latest,
+        )
+        distinct = await pool.fetchval(
+            "select count(distinct expected) from (select expected from run_inputs where run_id = $1 limit 5000) s", latest
+        )
+        keys = await pool.fetch(
+            "select distinct jsonb_object_keys(variables) as k from (select variables from run_inputs where run_id = $1 limit 20) s",
+            latest,
+        )
+        models = await pool.fetch(
+            "select m.display_name from run_models rm join models m on m.id = rm.model_id where rm.run_id = $1 order by 1", latest
+        )
+        values = ", ".join(repr(e["expected"][:40]) for e in expected[:16])
+        exp_text = (f"expected has {distinct} distinct values" + (f", e.g. {values}" if distinct <= 40 else " (free text)")) if expected else "no expected values"
+        lines.append(
+            f'- "{p["name"]}" (profile_id {p["id"]}): run_ids {", ".join(str(r["id"]) for r in runs)} (latest first); '
+            f"latest run's models: {', '.join(m['display_name'] for m in models)}; {exp_text}; "
+            f"variables keys: {', '.join(k['k'] for k in keys) or 'none'}"
+        )
+    return "\n".join(lines) or "(no benchmark profiles yet)"
+
+
 async def _system_prompt(scope: Scope, user_message: str) -> tuple[str, str]:
     if scope.kind == "run":
         context, label = await _run_context(scope.run_id)
@@ -232,6 +305,7 @@ async def _system_prompt(scope: Scope, user_message: str) -> tuple[str, str]:
         scope=context,
         schema=sqlconsole.schema_as_text(await sqlconsole.schema(scope.org_id)),
         connections=await _connections_context(scope.org_id),
+        notes=await _data_notes(scope),
         memories="\n".join(f"- {m}" for m in memories) or "(nothing yet)",
     )
     return system, label
@@ -265,34 +339,21 @@ async def _connections_context(org_id: int) -> str:
     return "\n".join(await asyncio.gather(*(describe(c) for c in rows)))
 
 
-async def _query(org_id: int, sql: str, source: str | None) -> tuple[dict, str | None]:
-    """Run the analyst's SQL on BenchMonster data or a named connection. Returns (result, source name)."""
-    if not source or source.strip().lower() in ("benchmonster", "benchmonster data", "default"):
-        return await sqlconsole.run(org_id, sql, max_rows=ROWS_FOR_MODEL), None
-    match = next((c for c in await _pg_connections(org_id) if c["name"].lower() == source.strip().lower()), None)
-    if not match:
-        raise sqlconsole.QueryError(f"no connected database named {source!r}")
-    _, cfg, sec = await linked.load_connection(org_id, match["id"])
-    try:
-        return await conns.pg_query(cfg, sec, sql, ROWS_FOR_MODEL), match["name"]
-    except HTTPException as e:
-        raise sqlconsole.QueryError(e.detail)
-
-
 async def _run_tool(scope: Scope, label: str, name: str, args: dict) -> tuple[str, dict]:
     """Returns (text for the model, record for the UI)."""
-    if name == "run_sql":
-        sql = args.get("sql", "")
-        source = args.get("source")
-        try:
-            res, source_name = await _query(scope.org_id, sql, source)
-        except sqlconsole.QueryError as e:
-            return f"ERROR: {e}", {"tool": name, "sql": sql, "source": source, "error": str(e)}
-        cols = [c["name"] for c in res["columns"]]
-        rows = [[_fmt(v) for v in r] for r in res["rows"]]
-        text = json.dumps({"columns": cols, "rows": rows, "truncated": res["truncated"]})
-        return text, {"tool": name, "sql": sql, "source": source_name, "columns": cols, "rows": rows,
-                      "truncated": res["truncated"]}
+    if name == "write_query":
+        sql = (args.get("sql") or "").strip()
+        source = (args.get("source") or "").strip()
+        if source.lower() in ("", "benchmonster", "benchmonster data", "default"):
+            source_name = None
+        else:
+            match = next((c for c in await _pg_connections(scope.org_id) if c["name"].lower() == source.lower()), None)
+            if not match:
+                return (f"ERROR: no connected database named {source!r}", {"tool": "query", "title": args.get("title"), "sql": sql,
+                                                                            "source": source, "error": f"unknown source {source!r}"})
+            source_name = match["name"]
+        return "shown to the user (not run)", {"tool": "query", "title": (args.get("title") or "").strip() or None,
+                                               "sql": sql, "source": source_name}
     if name == "save_finding":
         finding = args.get("finding", "").strip()
         meta = {k: v for k, v in (("run_id", scope.run_id), ("profile_id", scope.profile_id)) if v}
@@ -309,32 +370,48 @@ async def history(scope: Scope) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def _with_queries(content: str | None, tool_calls: list | None) -> str:
+    """An earlier reply plus the queries it wrote, so the analyst can fix one when the user reports an error."""
+    queries = [c for c in tool_calls or [] if c.get("tool") in ("query", "run_sql") and c.get("sql")]
+    parts = [content or ""] + [
+        f"[query you wrote{': ' + c['title'] if c.get('title') else ''}{' (source: ' + c['source'] + ')' if c.get('source') else ''}]\n{c['sql']}"
+        for c in queries
+    ]
+    return "\n\n".join(p for p in parts if p)
+
+
 async def chat(scope: Scope, user_message: str) -> dict:
     """One analyst turn. The scope must come from resolve_scope (org ownership checked)."""
     system, label = await _system_prompt(scope, user_message)
     cond, args = scope.where()
     past = await db.pool().fetch(
-        f"""select role, content from (
-               select id, role, content from assistant_messages
+        f"""select role, content, tool_calls from (
+               select id, role, content, tool_calls from assistant_messages
                where {cond} and role in ('user', 'assistant') order by id desc limit ${len(args) + 1}
            ) t order by id""",
         *args, HISTORY_TURNS * 2,
     )
     messages = [{"role": "system", "content": system}]
-    messages += [{"role": r["role"], "content": r["content"] or ""} for r in past]
+    messages += [{"role": r["role"], "content": _with_queries(r["content"], r["tool_calls"])} for r in past]
     messages.append({"role": "user", "content": user_message})
 
     ep = providers.vultr_endpoint(settings.assistant_model)
     tool_records: list[dict] = []
     drafts: list[str] = []  # answer text the model wrote alongside tool calls
     reply = None
+    empty_retry = False
     for _ in range(MAX_TOOL_ROUNDS):
-        resp = await providers.complete(ep, messages, tools=TOOLS, max_tokens=4096, temperature=0.2)
+        resp = await providers.complete(ep, messages, tools=TOOLS, max_tokens=8192, temperature=0.2)
         msg = resp["choices"][0]["message"]
         calls = msg.get("tool_calls") or []
         if not calls:
             reply = (msg.get("content") or "").strip()
-            break
+            if reply or empty_retry:
+                break
+            # An empty reply (e.g. the budget went on thinking): nudge once instead of giving up.
+            empty_retry = True
+            messages.append({"role": "user", "content": "Call write_query now with the query that answers my question, then explain it briefly."})
+            continue
         if (msg.get("content") or "").strip():
             drafts.append(msg["content"].strip())
         messages.append({"role": "assistant", "content": msg.get("content") or "", "tool_calls": calls})
@@ -351,8 +428,10 @@ async def chat(scope: Scope, user_message: str) -> dict:
     longest = max(drafts, key=len, default="")
     if len(longest) > 200 and len(reply or "") < len(longest) / 2:
         reply = f"{longest}\n\n{reply}".strip() if reply else longest
+    if not reply and any(r.get("tool") == "query" for r in tool_records):
+        reply = "Here's the query; run it in the console."
     if not reply:
-        reply = "I couldn't reach an answer within my tool-call budget. Try a narrower question."
+        reply = "I couldn't produce an answer this time (the model returned nothing). Try again, or split the question into smaller parts."
 
     profile_id = scope.profile_id if not scope.run_id else None
     async with db.pool().acquire() as conn, conn.transaction():
