@@ -143,6 +143,8 @@ export function ProfileEditor({
 
   // A profile has at most one record source; every per-record variable reads it.
   const [sets, setSets] = useState<InputSet[]>([]);
+  // Live count of the records the selection keeps, tagged with the selection it was computed for.
+  const [selectedCount, setSelectedCount] = useState<{ key: string; n: number } | null>(null);
   // Tables of Postgres connections, offered as record sources that are read directly.
   const [pgTables, setPgTables] = useState<{ connection: Connection; tables: PgTable[] }[]>([]);
   const [dropped, setDropped] = useState<string[]>([]);
@@ -457,7 +459,10 @@ export function ProfileEditor({
             return [v, resolved[0].mapping[v] ? r.value(resolved[0].mapping[v]) : `{{${v}}}`];
           }),
         );
-  const totalInputs = perRecord ? resolved.reduce((a, s) => a + s.input.row_count, 0) : 1;
+  // Records the run will use: the live count from Records to use, else every record in the source.
+  const selectionKey = recordSet ? `${recordSet.input.id}:${recordSet.linked?.key ?? ""}:${JSON.stringify(recordSet.selection)}` : "";
+  const selected = selectedCount && selectedCount.key === selectionKey ? selectedCount.n : null;
+  const totalInputs = perRecord ? (selected ?? resolved.reduce((a, s) => a + s.input.row_count, 0)) : 1;
   const requestsPerModel = runMode === "batch" ? Math.ceil(totalInputs / batchSize) : totalInputs;
 
   return (
@@ -811,6 +816,7 @@ export function ProfileEditor({
                 dataset={recordSet.input}
                 value={recordSet.selection}
                 onChange={(sel) => updateSet(recordSet.key, { ...recordSet, selection: sel })}
+                onCount={(n) => setSelectedCount(n == null ? null : { key: selectionKey, n })}
                 linked={recordSet.linked ? { connectionId: recordSet.linked.connectionId, table: recordSet.linked.table, key: recordSet.linked.key } : null}
               />
             )}

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api, type Dataset, type FilterRule, type RecordSelection, type SelectionPreview } from "@/lib/api";
 import { cleanSelection, isDefaultSelection, NO_VALUE, OPS } from "@/lib/selection";
 import { compactInputClass } from "./ui";
@@ -9,11 +9,12 @@ import { compactInputClass } from "./ui";
  * Which records of the record file a run uses: filter rules, one per field value,
  * and first / random N. Shows a live count from the server.
  */
-export function RecordFilter({ dataset, value, onChange, linked }: {
+export function RecordFilter({ dataset, value, onChange, linked, onCount }: {
   dataset: Dataset;
   value: RecordSelection;
   onChange: (s: RecordSelection) => void;
   linked?: { connectionId: number; table: string; key: string } | null; // count and preview in the database
+  onCount?: (selected: number | null) => void; // how many records the selection keeps (null while unknown)
 }) {
   const [open, setOpen] = useState(!isDefaultSelection(value));
   const [preview, setPreview] = useState<SelectionPreview | null>(null);
@@ -23,6 +24,10 @@ export function RecordFilter({ dataset, value, onChange, linked }: {
   const key = JSON.stringify(cleanSelection(value));
 
   const [lc, lt, lk] = [linked?.connectionId, linked?.table, linked?.key];
+  const countRef = useRef(onCount);
+  useEffect(() => {
+    countRef.current = onCount;
+  });
   useEffect(() => {
     const t = setTimeout(() => {
       (lc && lt && lk
@@ -32,8 +37,12 @@ export function RecordFilter({ dataset, value, onChange, linked }: {
         (p) => {
           setPreview(p);
           setError(null);
+          countRef.current?.(p.selected);
         },
-        (e) => setError(e.message),
+        (e) => {
+          setError(e.message);
+          countRef.current?.(null);
+        },
       );
     }, 300);
     return () => clearTimeout(t);
