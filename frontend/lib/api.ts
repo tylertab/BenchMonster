@@ -14,34 +14,67 @@ export type Model = {
 };
 
 export type ScoringMethod = "exact" | "contains" | "regex" | "numeric" | "json_schema" | "llm_judge";
+export type RunStatus = "queued" | "running" | "completed" | "failed";
+export type RunParams = { max_tokens: number; temperature: number; concurrency: number };
 
-export type BenchmarkListItem = {
+export type Prompt = {
   id: number;
   name: string;
-  description: string | null;
-  scoring_method: ScoringMethod;
+  system_prompt: string | null;
+  template: string;
+  variables: string[];
   created_at: string;
-  case_count: number;
+  updated_at: string;
+  created_by: string | null;
+  run_count: number;
+  last_run_at: string | null;
+};
+
+export type Dataset = {
+  id: number;
+  name: string;
+  filename: string;
+  format: string;
+  columns: string[];
+  row_count: number;
+  created_at: string;
+  created_by: string | null;
   run_count: number;
 };
 
+export type DatasetDetail = Dataset & { rows: ({ idx: number } & Record<string, string>)[] };
+
 export type RunListItem = {
   id: number;
+  name: string | null;
   status: RunStatus;
-  total_cases: number;
+  prompt_id: number | null;
+  prompt_name: string;
+  template: string;
+  output_name: string;
+  scoring_method: ScoringMethod;
+  total_inputs: number;
   created_at: string;
+  started_at: string | null;
   finished_at: string | null;
+  created_by: string | null;
+  input_files: string[];
+  models: string[];
+  done: number;
+  best_accuracy: number | null;
+  total_cost_usd: number | null;
 };
 
-export type Benchmark = BenchmarkListItem & {
-  system_prompt: string | null;
-  prompt_template: string;
-  scoring_config: Record<string, unknown>;
-  sample_cases: { idx: number; input: string; expected: string | null }[];
-  runs: RunListItem[];
+export type RunListQuery = {
+  q?: string;
+  status?: string;
+  prompt_id?: number;
+  dataset_id?: number;
+  model_id?: number;
+  sort?: "newest" | "oldest";
+  limit?: number;
+  offset?: number;
 };
-
-export type RunStatus = "queued" | "running" | "completed" | "failed";
 
 export type ModelSummary = {
   run_id: number;
@@ -63,28 +96,76 @@ export type ModelSummary = {
   cost_per_pass_usd: number | null;
 };
 
+export type RunDataset = {
+  position: number;
+  dataset_id: number | null;
+  dataset_name: string;
+  filename: string;
+  mapping: Record<string, string>;
+  expected_column: string | null;
+  rows: number;
+};
+
 export type Run = {
   id: number;
-  benchmark_id: number;
-  benchmark_name: string;
+  name: string | null;
+  prompt_id: number | null;
+  prompt_name: string;
+  template: string;
+  system_prompt: string | null;
+  variables: string[];
   scoring_method: ScoringMethod;
+  scoring_config: Record<string, unknown>;
+  output_name: string;
   status: RunStatus;
-  total_cases: number;
+  total_inputs: number;
   error: string | null;
-  params: { max_tokens: number; temperature: number; concurrency: number };
+  params: RunParams;
   created_at: string;
+  created_by_name: string | null;
   started_at: string | null;
   finished_at: string | null;
+  datasets: RunDataset[];
   models: { id: number; display_name: string; model_id: string; provider: string; is_custom: boolean; done: number; errors: number }[];
   summary: ModelSummary[];
 };
+
+export type RunConfig = {
+  name: string | null;
+  prompt_id: number | null;
+  prompt_name: string;
+  template: string;
+  system_prompt: string | null;
+  current_template: string | null;
+  current_system_prompt: string | null;
+  scoring_method: ScoringMethod;
+  scoring_config: Record<string, unknown>;
+  params: RunParams;
+  output_name: string;
+  datasets: RunDataset[];
+  model_ids: number[];
+};
+
+export type NewRun = {
+  name?: string;
+  prompt_id: number;
+  template?: string;
+  system_prompt?: string;
+  datasets: { dataset_id: number; mapping: Record<string, string>; expected_column: string | null }[];
+  scoring_method: ScoringMethod;
+  scoring_config: Record<string, unknown>;
+  model_ids: number[];
+  output_name?: string;
+} & RunParams;
 
 export type Result = {
   id: number;
   model_id: number;
   model: string;
-  case_idx: number;
-  input: string;
+  input_file: string;
+  row_idx: number;
+  variables: Record<string, string>;
+  prompt: string;
   expected: string | null;
   output: string | null;
   score: number | null;
@@ -97,13 +178,6 @@ export type Result = {
   reasoning_tokens: number | null;
   cost_usd: number | null;
   error: string | null;
-};
-
-export type ParsedDataset = {
-  columns: string[];
-  rows: Record<string, string>[];
-  suggested_input: string;
-  suggested_expected: string | null;
 };
 
 export type QueryResult = {
@@ -147,19 +221,6 @@ export type OrgDetails = {
 
 export type SavedQuery = { id: number; name: string; sql: string; created_by?: string | null; updated_at: string };
 
-export type RunConfig = {
-  benchmark_id: number;
-  name: string;
-  description: string | null;
-  system_prompt: string | null;
-  prompt_template: string;
-  scoring_method: ScoringMethod;
-  scoring_config: Record<string, unknown>;
-  params: { max_tokens: number; temperature: number; concurrency: number };
-  cases: { input: string; expected: string | null }[];
-  model_ids: number[];
-};
-
 export class ApiError extends Error {
   constructor(message: string, public status: number) {
     super(message);
@@ -191,6 +252,13 @@ const put = <T>(path: string, body: unknown) => request<T>(path, { method: "PUT"
 const patch = <T>(path: string, body: unknown) => request<T>(path, { method: "PATCH", body: JSON.stringify(body) });
 const del = <T>(path: string) => request<T>(path, { method: "DELETE" });
 
+function qs(params: Record<string, string | number | boolean | undefined | null>) {
+  const q = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) if (v !== undefined && v !== null && v !== "") q.set(k, String(v));
+  const s = q.toString();
+  return s ? `?${s}` : "";
+}
+
 export const api = {
   me: () => request<Me>("/auth/me"),
   signup: (body: { name: string; email: string; password: string; org_name?: string; invite_token?: string }) => post<Me>("/auth/signup", body),
@@ -211,13 +279,6 @@ export const api = {
   memories: () => request<{ id: string; content: string; created_at: string | null }[]>("/memory"),
   forget: (id: string) => del<{ ok: boolean }>(`/memory/${id}`),
 
-  savedQueries: () => request<SavedQuery[]>("/saved-queries"),
-  saveQuery: (name: string, sql: string) => post<SavedQuery>("/saved-queries", { name, sql }),
-  updateQuery: (id: number, name: string, sql: string) => put<SavedQuery>(`/saved-queries/${id}`, { name, sql }),
-  deleteQuery: (id: number) => del<{ ok: boolean }>(`/saved-queries/${id}`),
-
-  runConfig: (id: number | string) => request<RunConfig>(`/runs/${id}/config`),
-
   models: () => request<Model[]>("/models"),
   syncModels: () => request<{ synced: number }>("/models/sync", { method: "POST" }),
   addModel: (body: {
@@ -228,38 +289,39 @@ export const api = {
     input_cost_per_mtok: number;
     output_cost_per_mtok: number;
   }) => post<Model>("/models", body),
-  removeModel: (id: number) => request<{ ok: boolean }>(`/models/${id}`, { method: "DELETE" }),
+  removeModel: (id: number) => del<{ ok: boolean }>(`/models/${id}`),
 
-  parseDataset: (file: File) => {
+  prompts: () => request<Prompt[]>("/prompts"),
+  prompt: (id: number | string) => request<Prompt>(`/prompts/${id}`),
+  createPrompt: (body: { name: string; system_prompt?: string; template: string }) => post<Prompt>("/prompts", body),
+  updatePrompt: (id: number, body: { name: string; system_prompt?: string; template: string }) => put<Prompt>(`/prompts/${id}`, body),
+  deletePrompt: (id: number) => del<{ ok: boolean }>(`/prompts/${id}`),
+
+  datasets: () => request<Dataset[]>("/datasets"),
+  dataset: (id: number | string, limit = 20) => request<DatasetDetail>(`/datasets/${id}${qs({ limit })}`),
+  uploadDataset: (file: File, name?: string) => {
     const form = new FormData();
     form.append("file", file);
-    return request<ParsedDataset>("/datasets/parse", { method: "POST", body: form });
+    if (name) form.append("name", name);
+    return request<DatasetDetail>("/datasets", { method: "POST", body: form });
   },
-  benchmarks: () => request<BenchmarkListItem[]>("/benchmarks"),
-  benchmark: (id: number | string) => request<Benchmark>(`/benchmarks/${id}`),
-  createBenchmark: (body: {
-    name: string;
-    description?: string;
-    system_prompt?: string;
-    prompt_template: string;
-    scoring_method: ScoringMethod;
-    scoring_config: Record<string, unknown>;
-    cases: { input: string; expected: string | null }[];
-  }) => post<{ id: number }>("/benchmarks", body),
-  startRun: (benchmarkId: number | string, body: { model_ids: number[]; max_tokens: number; temperature: number; concurrency: number }) =>
-    post<{ id: number }>(`/benchmarks/${benchmarkId}/runs`, body),
+  deleteDataset: (id: number) => del<{ ok: boolean }>(`/datasets/${id}`),
 
+  runs: (query: RunListQuery = {}) => request<{ total: number; items: RunListItem[] }>(`/runs${qs(query)}`),
+  createRun: (body: NewRun) => post<{ id: number }>("/runs", body),
   run: (id: number | string) => request<Run>(`/runs/${id}`),
-  results: (id: number | string, opts: { modelId?: number; onlyFailed?: boolean; limit?: number } = {}) => {
-    const q = new URLSearchParams();
-    if (opts.modelId) q.set("model_id", String(opts.modelId));
-    if (opts.onlyFailed) q.set("only_failed", "true");
-    q.set("limit", String(opts.limit ?? 500));
-    return request<Result[]>(`/runs/${id}/results?${q}`);
-  },
+  runConfig: (id: number | string) => request<RunConfig>(`/runs/${id}/config`),
+  deleteRun: (id: number) => del<{ ok: boolean }>(`/runs/${id}`),
+  results: (id: number | string, opts: { modelId?: number; onlyFailed?: boolean; limit?: number } = {}) =>
+    request<Result[]>(`/runs/${id}/results${qs({ model_id: opts.modelId, only_failed: opts.onlyFailed || undefined, limit: opts.limit ?? 500 })}`),
+  predictionsUrl: (id: number | string) => `/api/runs/${id}/predictions`,
 
   query: (sql: string) => post<QueryResult>("/query", { sql }),
   schema: () => request<SchemaTable[]>("/query/schema"),
+  savedQueries: () => request<SavedQuery[]>("/saved-queries"),
+  saveQuery: (name: string, sql: string) => post<SavedQuery>("/saved-queries", { name, sql }),
+  updateQuery: (id: number, name: string, sql: string) => put<SavedQuery>(`/saved-queries/${id}`, { name, sql }),
+  deleteQuery: (id: number) => del<{ ok: boolean }>(`/saved-queries/${id}`),
 
   chatHistory: (runId: number | string) => request<ChatMessage[]>(`/runs/${runId}/chat`),
   chat: (runId: number | string, message: string) =>

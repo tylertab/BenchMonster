@@ -61,7 +61,13 @@ export function Header() {
         {me && (
           <>
             <Link href="/" className="text-sm text-ink-2 hover:text-ink">
-              Benchmarks
+              Runs
+            </Link>
+            <Link href="/prompts" className="text-sm text-ink-2 hover:text-ink">
+              Prompts
+            </Link>
+            <Link href="/datasets" className="text-sm text-ink-2 hover:text-ink">
+              Datasets
             </Link>
             <Link href="/models" className="text-sm text-ink-2 hover:text-ink">
               Models
@@ -105,8 +111,8 @@ export function Header() {
                   </>
                 )}
               </Menu>
-              <Link href="/benchmarks/new" className="rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-white hover:opacity-90">
-                Create benchmark
+              <Link href="/runs/new" className="rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-white hover:opacity-90">
+                New run
               </Link>
             </div>
           </>

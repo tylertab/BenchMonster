@@ -4,13 +4,18 @@ Benchmark LLMs — hosted or your own — on your data. Upload a dataset, descri
 
 ## How it works
 
-1. **Create a benchmark**: upload CSV/JSONL/JSON, map input + expected columns, pick a scoring method
-   (exact, contains, regex, numeric, JSON schema, or LLM judge), and select models.
-2. **Run**: every (model, case) pair is a real-time streaming call, run concurrently per model with
-   retries. Each result records latency, time to first token, throughput, tokens (incl. reasoning), and cost.
-3. **Dashboard**: leaderboard tiles, per-metric charts, accuracy-vs-cost, and a per-case explorer.
-4. **Review**: a read-only SQL console over the results, plus an AI analyst (text or voice) that
-   writes its own SQL and remembers findings across sessions.
+1. **Prompts**: reusable templates with `{{variable}}` placeholders (plus an optional system prompt).
+2. **Datasets**: upload CSV / JSONL / JSON input files; each row becomes one input.
+3. **Runs**: pick a prompt and one or more input files, map each template variable to a column
+   (and optionally an expected-output column), choose scoring (exact, contains, regex, numeric,
+   JSON schema, LLM judge) and models, and name the output predictions file. Every (model, input)
+   pair is a real-time streaming call, run concurrently with retries; each result records latency,
+   time to first token, throughput, tokens (incl. reasoning), and cost.
+4. **Runs list**: the home dashboard shows every run with its prompt template, input files, output
+   file, models, and headline metrics, newest first, with search and filters.
+5. **Run page**: charts, per-input results, predictions CSV download, and clone & edit.
+6. **Review**: a read-only SQL console (per-org views, saved queries) plus an AI analyst (text or
+   voice) that writes its own SQL and remembers findings per organization.
 
 ## Stack
 

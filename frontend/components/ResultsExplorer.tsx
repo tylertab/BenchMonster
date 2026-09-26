@@ -17,7 +17,7 @@ export function ResultsExplorer({ runId, models, refreshKey }: { runId: number; 
 
   return (
     <Card
-      title="Per-case results"
+      title="Per-input results"
       actions={
         <>
           <select className={compactInputClass} value={modelId ?? ""} onChange={(e) => setModelId(e.target.value ? Number(e.target.value) : undefined)}>
@@ -44,7 +44,7 @@ export function ResultsExplorer({ runId, models, refreshKey }: { runId: number; 
           <table className="w-full text-sm">
             <thead className="text-left text-xs text-muted">
               <tr>
-                <th className="w-10 pb-2 font-medium">#</th>
+                <th className="pb-2 font-medium">Input</th>
                 <th className="pb-2 font-medium">Model</th>
                 <th className="pb-2 font-medium">Output</th>
                 <th className="pb-2 font-medium">Result</th>
@@ -56,7 +56,9 @@ export function ResultsExplorer({ runId, models, refreshKey }: { runId: number; 
               {rows.map((r) => (
                 <Fragment key={r.id}>
                   <tr className="cursor-pointer border-t border-line hover:bg-surface-2" onClick={() => setOpen(open === r.id ? null : r.id)}>
-                    <td className="py-2 text-muted">{r.case_idx}</td>
+                    <td className="whitespace-nowrap py-2 pr-2 font-mono text-xs text-muted">
+                      {r.input_file}:{r.row_idx}
+                    </td>
                     <td className="py-2 whitespace-nowrap">{r.model}</td>
                     <td className="max-w-md truncate py-2 text-ink-2">{r.error && !r.output ? r.error : r.output}</td>
                     <td className="py-2 whitespace-nowrap">
@@ -71,8 +73,19 @@ export function ResultsExplorer({ runId, models, refreshKey }: { runId: number; 
                       <td colSpan={6} className="px-3 py-3">
                         <dl className="grid gap-3 text-sm md:grid-cols-3">
                           <div>
-                            <dt className="text-xs text-muted">Input</dt>
-                            <dd className="whitespace-pre-wrap">{r.input}</dd>
+                            <dt className="text-xs text-muted">Variables</dt>
+                            <dd className="space-y-1">
+                              {Object.entries(r.variables).map(([k, v]) => (
+                                <div key={k}>
+                                  <code className="text-xs text-accent">{`{{${k}}}`}</code>{" "}
+                                  <span className="whitespace-pre-wrap">{v}</span>
+                                </div>
+                              ))}
+                            </dd>
+                            <details className="mt-2">
+                              <summary className="cursor-pointer text-xs text-muted">Rendered prompt</summary>
+                              <pre className="mt-1 whitespace-pre-wrap font-mono text-xs">{r.prompt}</pre>
+                            </details>
                           </div>
                           <div>
                             <dt className="text-xs text-muted">Expected</dt>

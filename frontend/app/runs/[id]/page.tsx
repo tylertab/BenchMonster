@@ -5,6 +5,7 @@ import { useParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import { HBarChart, ProgressBar, ScatterChart, StatTile } from "@/components/charts";
 import { ResultsExplorer } from "@/components/ResultsExplorer";
+import { RunMetadata } from "@/components/RunMetadata";
 import { Card, Empty, ErrorNote, StatusBadge } from "@/components/ui";
 import { api, type ModelSummary, type Run } from "@/lib/api";
 import { ms, num, pct, usd, when } from "@/lib/format";
@@ -49,7 +50,7 @@ export default function RunPage() {
   const s = run.summary;
   const live = run.status === "queued" || run.status === "running";
   const done = run.models.reduce((a, m) => a + m.done, 0);
-  const total = run.total_cases * run.models.length;
+  const total = run.total_inputs * run.models.length;
   const n = (v: number | null) => (v == null ? null : Number(v));
 
   const mostAccurate = best(s, (r) => n(r.accuracy), "max");
@@ -64,30 +65,25 @@ export default function RunPage() {
     <div className="space-y-6">
       <div className="flex flex-wrap items-end gap-4">
         <div>
-          <Link href={`/benchmarks/${run.benchmark_id}`} className="text-sm text-ink-2 hover:text-ink">
-            ← {run.benchmark_name}
+          <Link href="/" className="text-sm text-ink-2 hover:text-ink">
+            ← Runs
           </Link>
           <h1 className="mt-1 flex items-center gap-3 text-2xl font-semibold tracking-tight">
-            Run #{run.id} <StatusBadge status={run.status} />
+            Run #{run.id}
+            {run.name && <span className="font-normal text-ink-2">{run.name}</span>}
+            <StatusBadge status={run.status} />
           </h1>
           <p className="mt-1 text-sm text-ink-2">
-            {run.models.length} models × {run.total_cases} cases · started {when(run.started_at ?? run.created_at)}
+            {run.models.length} model{run.models.length === 1 ? "" : "s"} × {run.total_inputs} input{run.total_inputs === 1 ? "" : "s"} · started {when(run.started_at ?? run.created_at)}
             {run.finished_at && ` · finished ${when(run.finished_at)}`}
+            {run.created_by_name && ` · by ${run.created_by_name}`}
           </p>
         </div>
         <div className="ml-auto flex flex-wrap items-center gap-2">
-          <a
-            href={`/api/runs/${run.id}/export.csv`}
-            download
-            className="rounded-md border border-line bg-surface px-3 py-2 text-sm font-medium hover:bg-surface-2"
-            title="Every input and output of this run as CSV"
-          >
-            ⬇ Download CSV
-          </a>
           <Link
-            href={`/benchmarks/new?from=${run.id}`}
+            href={`/runs/new?from=${run.id}`}
             className="rounded-md border border-line bg-surface px-3 py-2 text-sm font-medium hover:bg-surface-2"
-            title="Start a new run from this run's dataset, prompts, scoring, and models"
+            title="Start a new run from this run's prompt, input files, scoring, and models"
           >
             ⧉ Clone & edit
           </Link>
@@ -99,15 +95,17 @@ export default function RunPage() {
 
       <ErrorNote error={run.error} />
 
+      <RunMetadata run={run} />
+
       {live && (
         <Card title={`Running… ${done} / ${total} calls`}>
           <div className="space-y-3">
             {run.models.map((m) => (
               <div key={m.id} className="grid grid-cols-[200px_1fr_80px] items-center gap-3 text-sm">
                 <span className="truncate">{m.display_name}</span>
-                <ProgressBar value={m.done} max={run.total_cases} />
+                <ProgressBar value={m.done} max={run.total_inputs} />
                 <span className="tabular text-right text-ink-2">
-                  {m.done}/{run.total_cases}
+                  {m.done}/{run.total_inputs}
                   {m.errors > 0 && <span className="text-critical"> · {m.errors}✕</span>}
                 </span>
               </div>

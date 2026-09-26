@@ -26,7 +26,7 @@ export default function ReviewPage() {
           ← Run #{id} dashboard
         </Link>
         <h1 className="mt-1 flex items-center gap-3 text-2xl font-semibold tracking-tight">
-          Review: {run?.benchmark_name ?? "…"} {run && <StatusBadge status={run.status} />}
+          Review: {run ? run.name || run.prompt_name : "…"} {run && <StatusBadge status={run.status} />}
         </h1>
         <p className="mt-1 text-sm text-ink-2">Query the raw results with SQL, or ask the AI analyst.</p>
       </div>

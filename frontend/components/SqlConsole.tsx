@@ -11,16 +11,20 @@ export function presetQueries(runId: number) {
       sql: `select model, round(accuracy::numeric, 3) as accuracy, round(p50_latency_ms::numeric) as p50_ms,\n       total_cost_usd, cost_per_pass_usd\nfrom model_summary\nwhere run_id = ${runId}\norder by accuracy desc, total_cost_usd`,
     },
     {
-      label: "Hardest cases",
-      sql: `select case_idx, left(input, 80) as input, count(*) filter (where passed) as models_passed, count(*) as models\nfrom results\nwhere run_id = ${runId}\ngroup by case_idx, input\norder by models_passed, case_idx\nlimit 10`,
+      label: "Hardest inputs",
+      sql: `select input_file, row_idx, left(prompt, 80) as prompt, count(*) filter (where passed) as models_passed, count(*) as models\nfrom results\nwhere run_id = ${runId}\ngroup by input_file, row_idx, prompt\norder by models_passed, input_file, row_idx\nlimit 10`,
     },
     {
       label: "Failures",
-      sql: `select model, case_idx, expected, left(output, 120) as output, error\nfrom results\nwhere run_id = ${runId} and not coalesce(passed, false)\norder by model, case_idx`,
+      sql: `select model, input_file, row_idx, expected, left(output, 120) as output, error\nfrom results\nwhere run_id = ${runId} and not coalesce(passed, false)\norder by model, input_file, row_idx`,
     },
     {
       label: "Latency percentiles",
       sql: `select model,\n       percentile_cont(0.5) within group (order by latency_ms) as p50,\n       percentile_cont(0.9) within group (order by latency_ms) as p90,\n       percentile_cont(0.99) within group (order by latency_ms) as p99\nfrom results\nwhere run_id = ${runId} and error is null\ngroup by model order by p50`,
+    },
+    {
+      label: "Accuracy by file",
+      sql: `select input_file, model, count(*) as inputs, round(avg(score)::numeric, 3) as accuracy\nfrom results\nwhere run_id = ${runId}\ngroup by input_file, model\norder by input_file, accuracy desc`,
     },
     {
       label: "Reasoning overhead",
