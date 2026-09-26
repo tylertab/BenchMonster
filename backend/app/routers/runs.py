@@ -79,9 +79,13 @@ async def list_runs(
                    (select coalesce(json_agg(m.display_name order by m.display_name), '[]')
                       from run_models rm join models m on m.id = rm.model_id where rm.run_id = r.id) as models,
                    (select count(*) from results res where res.run_id = r.id) as done,
-                   (select max(accuracy) from analytics.model_summary s where s.run_id = r.id) as best_accuracy,
+                   top.accuracy as best_accuracy, top.model as top_model,
                    (select sum(cost_usd) from results res where res.run_id = r.id) as total_cost_usd
             from runs r left join users u on u.id = r.created_by
+            left join lateral (
+                select s.accuracy, s.model from analytics.model_summary s
+                where s.run_id = r.id order by s.accuracy desc nulls last, s.total_cost_usd limit 1
+            ) top on true
             where {cond}
             order by r.created_at {'desc' if sort == 'newest' else 'asc'}, r.id {'desc' if sort == 'newest' else 'asc'}
             limit {arg(limit)} offset {arg(offset)}""",

@@ -3,10 +3,9 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { METHODS } from "@/components/ScoringConfig";
 import { Card, compactInputClass, Empty, ErrorNote, inputClass } from "@/components/ui";
 import { api, type ProfileListItem } from "@/lib/api";
-import { pct, when } from "@/lib/format";
+import { when } from "@/lib/format";
 
 type Sort = "updated" | "name" | "runs";
 
@@ -23,7 +22,7 @@ export default function ProfilesHome() {
 
   const term = q.trim().toLowerCase();
   const shown = (profiles ?? [])
-    .filter((p) => !term || [p.name, p.description, p.prompt_name, ...p.input_files].some((s) => s?.toLowerCase().includes(term)))
+    .filter((p) => !term || [p.name, p.description].some((s) => s?.toLowerCase().includes(term)))
     .sort((a, b) =>
       sort === "name" ? a.name.localeCompare(b.name) : sort === "runs" ? b.run_count - a.run_count : b.updated_at.localeCompare(a.updated_at),
     );
@@ -47,7 +46,7 @@ export default function ProfilesHome() {
       </div>
 
       <div className="flex flex-wrap items-center gap-2">
-        <input className={`${inputClass} max-w-sm`} placeholder="Search names, prompts, input files…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search profiles" />
+        <input className={`${inputClass} max-w-sm`} placeholder="Search profiles…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search profiles" />
         <select className={compactInputClass} value={sort} onChange={(e) => setSort(e.target.value as Sort)} aria-label="Sort profiles">
           <option value="updated">Recently updated</option>
           <option value="name">Name</option>
@@ -80,12 +79,7 @@ export default function ProfilesHome() {
                 <tr>
                   <th className="pb-2 font-medium">Profile</th>
                   <th className="pb-2 font-medium">Version</th>
-                  <th className="pb-2 font-medium">Prompt</th>
-                  <th className="pb-2 font-medium">Record inputs</th>
-                  <th className="pb-2 font-medium">Scoring</th>
-                  <th className="pb-2 text-right font-medium">Models</th>
                   <th className="pb-2 text-right font-medium">Runs</th>
-                  <th className="whitespace-nowrap pb-2 pl-3 text-right font-medium">Best acc. (current)</th>
                   <th className="pb-2 pl-4 text-right font-medium">Last run</th>
                 </tr>
               </thead>
@@ -101,24 +95,7 @@ export default function ProfilesHome() {
                     <td className="py-2.5 pr-3">
                       <span className="rounded-full bg-accent/10 px-2 py-0.5 text-xs font-medium text-accent">v{p.current_version}</span>
                     </td>
-                    <td className="max-w-[12rem] py-2.5 pr-3 text-ink-2">{p.prompt_name}</td>
-                    <td className="max-w-[14rem] py-2.5 pr-3">
-                      {p.input_files.length ? (
-                        <div className="flex flex-col items-start gap-1">
-                          {p.input_files.map((f, i) => (
-                            <span key={i} className="max-w-full truncate rounded bg-surface-2 px-1.5 py-0.5 font-mono text-xs text-ink-2" title={f}>
-                              ↳ {f}
-                            </span>
-                          ))}
-                        </div>
-                      ) : (
-                        <span className="text-xs text-muted">single prompt</span>
-                      )}
-                    </td>
-                    <td className="py-2.5 pr-3 text-xs text-ink-2">{METHODS.find((m) => m.value === p.scoring_method)?.label ?? p.scoring_method}</td>
-                    <td className="tabular py-2.5 text-right">{p.model_count}</td>
                     <td className="tabular py-2.5 text-right">{p.run_count}</td>
-                    <td className="tabular py-2.5 pl-3 text-right">{pct(p.current_best_accuracy, 1)}</td>
                     <td className="whitespace-nowrap py-2.5 pl-4 text-right text-xs text-ink-2">{p.last_run_at ? when(p.last_run_at) : "never"}</td>
                   </tr>
                 ))}

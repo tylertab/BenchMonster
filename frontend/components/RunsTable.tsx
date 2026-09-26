@@ -16,7 +16,7 @@ export function RunsTable({ runs }: { runs: RunListItem[] }) {
           <tr>
             <th className="pb-2 font-medium">Run ID</th>
             <th className="pb-2 font-medium">Profile</th>
-            <th className="whitespace-nowrap pb-2 pl-3 text-right font-medium">Best acc.</th>
+            <th className="whitespace-nowrap pb-2 pl-3 text-right font-medium" title="Accuracy of the best model in the run">Top accuracy</th>
             <th className="pb-2 pl-3 text-right font-medium">Cost</th>
             <th className="pb-2 pl-4 font-medium">Run by</th>
             <th className="pb-2 pl-4 text-right font-medium">Run date</th>
@@ -60,7 +60,10 @@ export function RunsTable({ runs }: { runs: RunListItem[] }) {
                     <span className="text-muted">–</span>
                   )}
                 </td>
-                <td className="tabular whitespace-nowrap py-2.5 pl-3 text-right">{pct(r.best_accuracy, 1)}</td>
+                <td className="whitespace-nowrap py-2.5 pl-3 text-right">
+                  <div className="tabular">{pct(r.best_accuracy, 1)}</div>
+                  {r.top_model && <div className="text-xs text-muted">{r.top_model}</div>}
+                </td>
                 <td className="tabular whitespace-nowrap py-2.5 pl-3 text-right">{usd(r.total_cost_usd)}</td>
                 <td className="whitespace-nowrap py-2.5 pl-4 text-xs text-ink-2">{r.created_by ?? "–"}</td>
                 <td className="whitespace-nowrap py-2.5 pl-4 text-right text-xs text-ink-2">{when(r.started_at ?? r.created_at)}</td>

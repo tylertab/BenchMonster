@@ -76,6 +76,7 @@ export type RunListItem = {
   models: string[];
   done: number;
   best_accuracy: number | null;
+  top_model: string | null; // model with the best accuracy (ties: cheaper)
   total_cost_usd: number | null;
 };
 
