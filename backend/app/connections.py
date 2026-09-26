@@ -258,6 +258,16 @@ async def pg_connect(cfg: PgConfig, sec: PgSecret) -> asyncpg.Connection:
         raise ConnectionError_(f"can't connect to {cfg.host}: {str(e)[:300] or type(e).__name__}")
 
 
+# Tables and views this login can read. Privileges are checked by OID: the name-based
+# has_table_privilege('schema.table') raises for schemas the login can't use at all.
+READABLE = """select c.oid, n.nspname as schema, c.relname as name, c.relkind, c.reltuples
+    from pg_class c join pg_namespace n on n.oid = c.relnamespace
+    where c.relkind in ('r', 'p', 'v', 'm', 'f') and not c.relispartition
+      and n.nspname not in ('information_schema', 'toolkit_experimental') and n.nspname !~ '^(pg_|_?timescaledb)'
+      and c.relname !~ '^pg_stat_statements'
+      and has_schema_privilege(n.oid, 'USAGE') and has_table_privilege(c.oid, 'SELECT')"""
+
+
 async def pg_check(cfg: PgConfig, sec: PgSecret, allow_write: bool) -> dict:
     try:
         conn = await pg_connect(cfg, sec)
@@ -265,11 +275,8 @@ async def pg_check(cfg: PgConfig, sec: PgSecret, allow_write: bool) -> dict:
         return {"read": False, "write": None, "detail": e.detail}
     try:
         row = await conn.fetchrow(
-            """select current_user as who, current_setting('transaction_read_only') = 'on' as read_only,
-                      (select count(*) from information_schema.tables t
-                        where t.table_schema not in ('pg_catalog', 'information_schema', 'toolkit_experimental')
-                          and t.table_schema !~ '^_?timescaledb' and t.table_name !~ '^pg_stat_statements'
-                          and has_table_privilege(quote_ident(t.table_schema) || '.' || quote_ident(t.table_name), 'SELECT')) as readable,
+            f"""select current_user as who, current_setting('transaction_read_only') = 'on' as read_only,
+                      (select count(*) from ({READABLE}) r) as readable,
                       has_schema_privilege($1, 'CREATE') as can_create""",
             cfg.schema_,
         )
@@ -291,21 +298,16 @@ async def pg_tables(cfg: PgConfig, sec: PgSecret) -> list[dict]:
     conn = await pg_connect(cfg, sec)
     try:
         rows = await conn.fetch(
-            """select t.table_schema as schema, t.table_name as name, t.table_type as type,
-                      (select array_agg(c.column_name::text order by c.ordinal_position) from information_schema.columns c
-                        where c.table_schema = t.table_schema and c.table_name = t.table_name) as columns,
-                      coalesce((select greatest(cl.reltuples, 0)::bigint from pg_class cl join pg_namespace n on n.oid = cl.relnamespace
-                        where n.nspname = t.table_schema and cl.relname = t.table_name), 0) as approx_rows,
-                      (select array_agg(a.attname::text order by array_position(i.indkey::int2[], a.attnum))
-                        from pg_index i join pg_attribute a on a.attrelid = i.indrelid and a.attnum = any(i.indkey)
-                        where i.indisprimary
-                          and i.indrelid = (quote_ident(t.table_schema) || '.' || quote_ident(t.table_name))::regclass) as primary_key
-               from information_schema.tables t
-               where t.table_schema not in ('pg_catalog', 'information_schema', 'toolkit_experimental')
-                 and t.table_schema !~ '^_?timescaledb' and t.table_name !~ '^pg_stat_statements'
-                 and has_table_privilege(quote_ident(t.table_schema) || '.' || quote_ident(t.table_name), 'SELECT')
-               order by t.table_schema = 'public' desc, t.table_schema, t.table_name
-               limit 500"""
+            f"""select r.schema, r.name, case when r.relkind in ('v', 'm') then 'VIEW' else 'BASE TABLE' end as type,
+                       (select array_agg(a.attname::text order by a.attnum) from pg_attribute a
+                         where a.attrelid = r.oid and a.attnum > 0 and not a.attisdropped) as columns,
+                       greatest(r.reltuples, 0)::bigint as approx_rows,
+                       (select array_agg(a.attname::text order by array_position(i.indkey::int2[], a.attnum))
+                         from pg_index i join pg_attribute a on a.attrelid = i.indrelid and a.attnum = any(i.indkey)
+                         where i.indisprimary and i.indrelid = r.oid) as primary_key
+                from ({READABLE}) r
+                order by r.schema = 'public' desc, r.schema, r.name
+                limit 500"""
         )
     finally:
         await conn.close()
@@ -498,13 +500,11 @@ async def pg_schema(cfg: PgConfig, sec: PgSecret) -> list[dict]:
     conn = await pg_connect(cfg, sec)
     try:
         rows = await conn.fetch(
-            """select c.table_schema, c.table_name, c.column_name, c.data_type
-               from information_schema.columns c
-               where c.table_schema not in ('pg_catalog', 'information_schema', 'toolkit_experimental')
-                 and c.table_schema !~ '^_?timescaledb' and c.table_name !~ '^pg_stat_statements'
-                 and has_table_privilege(quote_ident(c.table_schema) || '.' || quote_ident(c.table_name), 'SELECT')
-               order by c.table_schema = 'public' desc, c.table_schema, c.table_name, c.ordinal_position
-               limit 5000"""
+            f"""select r.schema as table_schema, r.name as table_name, a.attname::text as column_name,
+                       format_type(a.atttypid, a.atttypmod) as data_type
+                from ({READABLE}) r join pg_attribute a on a.attrelid = r.oid and a.attnum > 0 and not a.attisdropped
+                order by r.schema = 'public' desc, r.schema, r.name, a.attnum
+                limit 5000"""
         )
     finally:
         await conn.close()
