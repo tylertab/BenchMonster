@@ -20,6 +20,8 @@ from . import db, linked, memory, providers, sqlconsole
 from .config import settings
 
 MAX_TOOL_ROUNDS = 5  # a couple of look_ups, write_query, then the answer
+MAX_LOOKUPS = 2
+TURN_SECONDS = 120  # give up on a turn after this (voice users are waiting)
 HISTORY_TURNS = 12
 
 
@@ -308,6 +310,12 @@ async def _data_notes(scope: Scope) -> str:
         models = await pool.fetch(
             "select m.display_name from run_models rm join models m on m.id = rm.model_id where rm.run_id = $1 order by 1", latest
         )
+        src = await pool.fetchrow(
+            """select rd.source, rd.fields, c.name as connection from run_datasets rd
+               left join connections c on c.id = (rd.source->>'connection_id')::int
+               where rd.run_id = $1 and rd.source is not null limit 1""",
+            latest,
+        )
         values = ", ".join(repr(e["expected"][:40]) for e in expected[:16])
         exp_text = (f"expected has {distinct} distinct values" + (f", e.g. {values}" if distinct <= 40 else " (free text)")) if expected else "no expected values"
         lines.append(
@@ -315,6 +323,14 @@ async def _data_notes(scope: Scope) -> str:
             f"latest run's models: {', '.join(m['display_name'] for m in models)}; {exp_text}; "
             f"variables keys: {', '.join(k['k'] for k in keys) or 'none'}"
         )
+        if src:
+            key = src["source"].get("key")
+            lines.append(
+                f'  Its records are read from table {src["source"].get("table")} in the connected database "{src["connection"]}" '
+                f"(source = that name). BenchMonster results keep only the row key (variables->>'{key}' = that table's {key}); "
+                "every other field of the record (e.g. demographics) exists only in that table, so breakdowns by those fields "
+                "need one query per source."
+            )
     return "\n".join(lines) or "(no benchmark profiles yet)"
 
 
@@ -588,8 +604,30 @@ async def chat(scope: Scope, user_message: str) -> dict:
     drafts: list[str] = []  # answer text the model wrote alongside tool calls
     reply = None
     empty_retry = False
-    for _ in range(MAX_TOOL_ROUNDS):
-        resp = await providers.complete(ep, messages, tools=TOOLS, max_tokens=8192, temperature=0.2)
+    timed_out = False
+    nudged = False
+    deadline = asyncio.get_running_loop().time() + TURN_SECONDS
+    lookups = 0
+    for round_no in range(MAX_TOOL_ROUNDS):
+        last = round_no == MAX_TOOL_ROUNDS - 1
+        remaining = deadline - asyncio.get_running_loop().time()
+        if remaining <= 5:
+            break
+        # Cap the exploring: after MAX_LOOKUPS, or on the last round, only writing the query is allowed.
+        tools = [t for t in TOOLS if t["function"]["name"] == "write_query"] if last else (
+            [t for t in TOOLS if t["function"]["name"] != "look_up"] if lookups >= MAX_LOOKUPS else TOOLS)
+        if (last or lookups >= MAX_LOOKUPS) and not nudged:
+            nudged = True
+            messages.append({"role": "user", "content": "No more lookups: call write_query now with your best query (one per source if the question needs two), then explain it briefly."})
+        try:
+            resp = await asyncio.wait_for(
+                providers.complete(ep, messages, tools=tools, max_tokens=8192, temperature=0.2,
+                                   **({"reasoning_effort": settings.assistant_reasoning_effort} if settings.assistant_reasoning_effort else {})),
+                timeout=remaining
+            )
+        except asyncio.TimeoutError:
+            timed_out = True
+            break
         msg = resp["choices"][0]["message"]
         calls = msg.get("tool_calls") or []
         if not calls:
@@ -608,6 +646,8 @@ async def chat(scope: Scope, user_message: str) -> dict:
                 call_args = json.loads(call["function"].get("arguments") or "{}")
             except json.JSONDecodeError:
                 call_args = {}
+            if call["function"]["name"] == "look_up":
+                lookups += 1
             text, record = await _run_tool(scope, label, call["function"]["name"], call_args)
             tool_records.append(record)
             messages.append({"role": "tool", "tool_call_id": call["id"], "content": text})
@@ -624,7 +664,8 @@ async def chat(scope: Scope, user_message: str) -> dict:
     if not reply and any(r.get("tool") == "query" for r in tool_records):
         reply = "Here's the query; run it in the console."
     if not reply:
-        reply = "I couldn't produce an answer this time (the model returned nothing). Try again, or split the question into smaller parts."
+        reply = ("That took too long, so I stopped. " if timed_out else "I couldn't produce an answer this time. ") + (
+            "Try asking for one thing at a time (for example, just the accuracy by gender)." )
 
     profile_id = scope.profile_id if not scope.run_id else None
     async with db.pool().acquire() as conn, conn.transaction():

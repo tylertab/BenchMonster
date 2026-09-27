@@ -25,6 +25,9 @@ class Settings(BaseSettings):
 
     # Model the review assistant runs on (a Vultr model id).
     assistant_model: str = "glm-5.3"
+    # How hard the analyst model thinks. Its default effort could spend the whole token budget
+    # reasoning (60s+, no answer); "medium" answers in seconds. Blank = the model's default.
+    assistant_reasoning_effort: str = "medium"
     # Model used for LLM-as-judge scoring.
     judge_model: str = "deepseek-v4.1-flash"
 
